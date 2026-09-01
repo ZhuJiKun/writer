@@ -70,15 +70,36 @@
 
 <script>
 const OTHERS = {{ others_brief | tojson }};
+// 全部用 DOM API + textContent 构建，角色名等用户可控字符串不经 innerHTML，杜绝存储型 XSS
 function addRelRow() {
   const row = document.createElement('div');
   row.className = 'rel-row';
-  const opts = ['<option value="">选择角色…</option>']
-    .concat(OTHERS.map(o => `<option value="${o.id}">${o.name}（${o.role_type}）</option>`)).join('');
-  row.innerHTML = `<select name="rel_target">${opts}</select>
-    <input type="text" name="rel_relation" placeholder="关系，如 师徒">
-    <input type="text" name="rel_note" placeholder="备注（可空）">
-    <button type="button" class="btn-inline" onclick="this.parentElement.remove()">删行</button>`;
+  const sel = document.createElement('select');
+  sel.name = 'rel_target';
+  const blank = document.createElement('option');
+  blank.value = '';
+  blank.textContent = '选择角色…';
+  sel.appendChild(blank);
+  OTHERS.forEach(o => {
+    const opt = document.createElement('option');
+    opt.value = o.id;
+    opt.textContent = o.name + '（' + o.role_type + '）';
+    sel.appendChild(opt);
+  });
+  const rel = document.createElement('input');
+  rel.type = 'text';
+  rel.name = 'rel_relation';
+  rel.placeholder = '关系，如 师徒';
+  const note = document.createElement('input');
+  note.type = 'text';
+  note.name = 'rel_note';
+  note.placeholder = '备注（可空）';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-inline';
+  btn.textContent = '删行';
+  btn.onclick = function () { row.remove(); };
+  row.append(sel, rel, note, btn);
   document.getElementById('rel-rows').appendChild(row);
 }
 </script>

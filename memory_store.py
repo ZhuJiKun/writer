@@ -115,9 +115,19 @@ def covered_nos():
 
 
 @synchronized(_LOCK)
-def append_merged(segments):
-    """追加合并摘要段。segments: [{from_no, to_no, range, summary}, ...]"""
+def replace_overlapping(from_no, to_no, segments):
+    """原子完成「删除与 [from_no, to_no] 相交的旧段 + 追加新段」（单次加锁单次落盘）。
+
+    选区压缩用：避免「先删后加」两次独立写之间进程被杀，留下旧段已删、新段未写的空洞。
+    segments: [{from_no, to_no, range, summary}, ...]
+    """
     store = load_store()
+
+    def overlaps(m):
+        a, b = m.get("from_no"), m.get("to_no")
+        return isinstance(a, int) and isinstance(b, int) and a <= to_no and from_no <= b
+
+    store["merged_summaries"] = [m for m in store["merged_summaries"] if not overlaps(m)]
     for s in segments:
         if not s.get("summary"):
             continue
@@ -129,20 +139,3 @@ def append_merged(segments):
             "created_at": _now()})
     save_store(store)
     return store["merged_summaries"]
-
-
-@synchronized(_LOCK)
-def delete_overlapping(from_no, to_no):
-    """删除与 [from_no, to_no] 区间相交的合并摘要段（仅判断有结构化字段的），返回删除数。"""
-    store = load_store()
-
-    def overlaps(m):
-        a, b = m.get("from_no"), m.get("to_no")
-        return isinstance(a, int) and isinstance(b, int) and a <= to_no and from_no <= b
-
-    before = len(store["merged_summaries"])
-    store["merged_summaries"] = [m for m in store["merged_summaries"] if not overlaps(m)]
-    removed = before - len(store["merged_summaries"])
-    if removed:
-        save_store(store)
-    return removed

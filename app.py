@@ -181,28 +181,32 @@ def chapter_confirm(bid):
     batch = hst.get_batch(bid)
     if not batch or batch.get("status") != "planned":
         return redirect(url_for("chapter", err="批次不存在或已确认"))
-    if we.active_task():
-        # 先检查再落盘：避免「大纲已写入但任务没启动」的半成功状态
-        return redirect(url_for("chapter", err="已有任务在运行，请等它结束后再确认"))
     titles = [t.strip() for t in request.form.getlist("plan_title")]
     summaries = [s.strip() for s in request.form.getlist("plan_summary")]
     plan = [{"title": t, "summary": s} for t, s in zip(titles, summaries) if t and s]
     if not plan:
         return redirect(url_for("chapter", err="细纲不能为空（每章都需要标题与细纲）"))
-    # 目标卷：沿用批次设定；卷被删了或选择新卷时自动建卷
-    vol = ost.get_volume(batch.get("vol_id") or "")
-    if vol is None:
-        title = batch.get("new_vol_title") or "第%d卷" % (len(ost.load_store()["volumes"]) + 1)
-        vol = ost.add_volume(title, batch.get("brief", "")[:80])
-    chapter_ids = []
-    for item in plan:
-        ch = ost.add_chapter(vol["id"], item["title"], item["summary"], status=ost.STATUS_TODO)
-        hst.upsert_entry(hst.new_entry(ch["id"], batch_id=bid, min_words=batch.get("min_words", 1500)))
-        chapter_ids.append(ch["id"])
-    hst.update_batch(bid, plan=plan, chapter_ids=chapter_ids, vol_id=vol["id"], status="confirmed")
-    tid = we.start_generate(chapter_ids)
-    if not tid:
+    # 先原子占住任务槽再写盘：并发重复提交时，后到的请求在这里就会被拦下，
+    # 不会把重复章节写进大纲（旧顺序是「先落盘后启动」，竞态下会留 planned 孤儿章节）
+    tid = we.reserve_task("generate", len(plan))
+    if tid is None:
         return redirect(url_for("chapter", err="已有任务在运行，请等它结束后再确认"))
+    try:
+        # 目标卷：沿用批次设定；卷被删了或选择新卷时自动建卷
+        vol = ost.get_volume(batch.get("vol_id") or "")
+        if vol is None:
+            title = batch.get("new_vol_title") or "第%d卷" % (len(ost.load_store()["volumes"]) + 1)
+            vol = ost.add_volume(title, batch.get("brief", "")[:80])
+        chapter_ids = []
+        for item in plan:
+            ch = ost.add_chapter(vol["id"], item["title"], item["summary"], status=ost.STATUS_TODO)
+            hst.upsert_entry(hst.new_entry(ch["id"], batch_id=bid, min_words=batch.get("min_words", 1500)))
+            chapter_ids.append(ch["id"])
+        hst.update_batch(bid, plan=plan, chapter_ids=chapter_ids, vol_id=vol["id"], status="confirmed")
+    except Exception as e:
+        we.abort_task(tid, "细纲落盘失败：%s" % e)
+        return redirect(url_for("chapter", err="细纲落盘失败：" + str(e)))
+    we.launch_task(tid, "generate", chapter_ids)
     return redirect(url_for("chapter", task=tid))
 
 
@@ -216,9 +220,9 @@ def chapter_discard(bid):
 
 
 def _sorted_ids(ids):
-    """按全局章号排序章节 id 列表（生成与采纳都按剧情顺序处理）。"""
+    """按全局章号排序章节 id 列表（生成与采纳都按剧情顺序处理）；重复提交的 id 去重。"""
     order = {ch["id"]: no for _, ch, no in ost.iter_chapters()}
-    return sorted((i for i in ids if i in order), key=lambda i: order[i])
+    return sorted((i for i in dict.fromkeys(ids) if i in order), key=lambda i: order[i])
 
 
 @app.route("/chapter/regenerate", methods=["POST"])
@@ -227,34 +231,42 @@ def chapter_regenerate():
     ids = _sorted_ids(request.form.getlist("chapter_ids"))
     if not ids:
         return redirect(url_for("chapter", err="请先勾选要重新生成的章节"))
-    if we.active_task():
-        return redirect(url_for("chapter", err="已有任务在运行，请等它结束"))
     note = request.form.get("note", "").strip()
-    ok, skipped = 0, 0
+    # 先只读算出可重生成的章节：reset_for_regen 会清空正文，若先写盘再占槽，
+    # 并发下占槽失败会把草稿清成 planned 孤儿（与 chapter_confirm 同一顺序：先 reserve 再写盘再 launch）
+    to_regen, skipped = [], 0
     for cid in ids:
         entry = hst.get_entry(cid)
         if entry:
             if entry.get("status") in hst.REGENERABLE:
-                hst.reset_for_regen(cid, note)
-                ok += 1
+                to_regen.append((cid, "reset"))
             else:
                 skipped += 1
         else:
             _, ch, _ = ost.find_chapter(cid)
             if ch and ch.get("status") == ost.STATUS_TODO:
-                hst.upsert_entry(hst.new_entry(cid, min_words=we.DEFAULT_MIN_WORDS))
-                ok += 1
+                to_regen.append((cid, "new"))
             else:
                 skipped += 1
-    if not ok:
+    if not to_regen:
         return redirect(url_for("chapter", err="所选章节都不可重新生成（已采纳/已生成的章节不可推翻）"))
-    tid = we.start_generate([cid for cid in ids
-                             if (hst.get_entry(cid) or {}).get("status") == hst.ST_PLANNED])
-    msg = "已加入重新生成队列：%d 章" % ok
+    tid = we.reserve_task("generate", len(to_regen))
+    if tid is None:
+        return redirect(url_for("chapter", err="已有任务在运行，请等它结束"))
+    try:
+        for cid, op in to_regen:
+            if op == "reset":
+                hst.reset_for_regen(cid, note)
+            else:
+                hst.upsert_entry(hst.new_entry(cid, min_words=we.DEFAULT_MIN_WORDS))
+    except Exception as e:
+        we.abort_task(tid, "重置章节失败：%s" % e)
+        return redirect(url_for("chapter", err="重置章节失败：" + str(e)))
+    we.launch_task(tid, "generate", [cid for cid, _ in to_regen])
+    msg = "已加入重新生成队列：%d 章" % len(to_regen)
     if skipped:
         msg += "，跳过 %d 章（已采纳或已生成）" % skipped
-    return redirect(url_for("chapter", task=tid, msg=msg) if tid
-                    else url_for("chapter", err="任务启动失败"))
+    return redirect(url_for("chapter", task=tid, msg=msg))
 
 
 @app.route("/chapter/adopt", methods=["POST"])
@@ -269,6 +281,8 @@ def chapter_adopt():
     if we.active_task():
         return redirect(url_for("chapter", err="已有任务在运行，请等它结束"))
     tid = we.start_adopt(drafts)
+    if not tid:
+        return redirect(url_for("chapter", err="已有任务在运行，请等它结束"))
     skipped = len(ids) - len(drafts)
     msg = "采纳任务已启动：%d 章" % len(drafts)
     if skipped:
@@ -376,16 +390,32 @@ def generate_protagonist():
         return redirect(url_for("characters", err=str(e)))
     chars = cst.load_chars()
     new_c = cl.build_character(data, "主角", "wizard", chars)
-    cst.touch_state(new_c, "从作品档案生成")
     existing = next((c for c in chars if c.get("role_type") == "主角"), None)
-    if existing:  # 已有主角 → 覆盖档案，保留 id / 创建时间 / 对话记录
-        new_c["id"] = existing["id"]
-        new_c["created_at"] = existing["created_at"]
-        new_c["chat_history"] = existing.get("chat_history", [])
-    if cst.name_taken(new_c["name"], exclude_id=new_c["id"]):
-        return redirect(url_for("characters",
-                                err="生成的主角名「%s」与现有角色重名，请重试或先调整现有角色" % new_c["name"]))
-    cst.upsert(new_c)
+    if not existing:
+        cst.touch_state(new_c, "从作品档案生成")
+        if cst.name_taken(new_c["name"]):
+            return redirect(url_for("characters",
+                                    err="生成的主角名「%s」与现有角色重名，请重试或先调整现有角色" % new_c["name"]))
+        cst.upsert(new_c)
+        return redirect(url_for("characters", msg=f"已生成主角「{new_c['name']}」"))
+
+    # 已有主角 → 锁内覆盖档案，以锁内最新记录为准保留
+    # id / 创建时间 / 对话记录 / 状态历史 / 手动维护的关系（不随档案覆盖丢失）
+    def _apply(char):
+        new_c["id"] = char["id"]
+        new_c["created_at"] = char["created_at"]
+        for k in ("chat_history", "state_history", "relationships"):
+            new_c[k] = char.get(k, [])
+        cst.touch_state(new_c, "从作品档案生成")
+        if cst.name_taken(new_c["name"], exclude_id=char["id"]):
+            raise ValueError("生成的主角名「%s」与现有角色重名，请重试或先调整现有角色" % new_c["name"])
+        char.clear()
+        char.update(new_c)
+
+    try:
+        cst.update_character(existing["id"], _apply)
+    except ValueError as e:
+        return redirect(url_for("characters", err=str(e)))
     return redirect(url_for("characters", msg=f"已生成主角「{new_c['name']}」"))
 
 
@@ -404,33 +434,45 @@ def character_new_chat():
     sid = request.form.get("sid", "").strip()
     draft = cst.get_draft(sid) if sid else None
     if draft is None:
-        draft = cst.new_draft()
+        draft = cst.create_draft()
+    sid = draft["id"]
     try:
-        result = cl.char_chat_turn(draft, msg)
+        result = cl.char_chat_turn(draft, msg)  # 只读快照做 LLM 计算，不修改草稿
     except cl.LLMError as e:
         return jsonify(ok=False, detail=str(e)), 502
-    if result["done"]:
-        chars = cst.load_chars()
-        char = cl.build_character(draft["data"], draft["data"].get("role_type") or "配角",
-                                  "dialog", chars)
-        if cst.name_taken(char["name"]):
-            # 同名不入库：打回对话让用户换个名字
-            reply = "角色「%s」已经存在了，请给这个角色换一个名字。" % char["name"]
-            draft["done"] = False
-            if draft["history"] and draft["history"][-1].get("role") == "assistant":
-                draft["history"][-1]["content"] = reply
-            cst.save_draft(draft["id"], draft)
-            return jsonify(ok=True, reply=reply, done=False,
-                           sid=draft["id"], data=draft["data"])
-        char["chat_history"] = list(draft["history"])  # 创建对话留档，作为后续对话调整的上下文
-        cst.touch_state(char, "对话创建")
-        cst.upsert(char)
-        cst.pop_draft(draft["id"])
+    new_msgs = [{"role": "user", "content": msg},
+                {"role": "assistant", "content": result["reply"]}]
+
+    def _merge(d):
+        d["history"].extend(new_msgs)
+        cl.merge_extracted_data(d["data"], result["extracted"])
+        d["done"] = result["done"]
+
+    draft = cst.update_draft(sid, _merge)  # 锁内合并写回，不与并发请求互相覆盖
+    if draft is None:
+        return jsonify(ok=False, detail="对话草稿不存在"), 404
+    if not result["done"]:
+        return jsonify(ok=True, reply=result["reply"], done=False,
+                       sid=sid, data=draft["data"])
+
+    # 建档：锁内重检姓名唯一后，原子完成「建档 + 清草稿」
+    char = cl.build_character(draft["data"], draft["data"].get("role_type") or "配角",
+                              "dialog", cst.load_chars())
+    char["chat_history"] = list(draft["history"])  # 创建对话留档，作为后续对话调整的上下文
+    cst.touch_state(char, "对话创建")
+    if cst.promote_draft(sid, char):
         return jsonify(ok=True, reply=result["reply"], done=True,
-                       sid=draft["id"], data=draft["data"], char_id=char["id"])
-    cst.save_draft(draft["id"], draft)
-    return jsonify(ok=True, reply=result["reply"], done=False,
-                   sid=draft["id"], data=draft["data"])
+                       sid=sid, data=draft["data"], char_id=char["id"])
+    # 同名不入库：打回对话让用户换个名字
+    reply = "角色「%s」已经存在了，请给这个角色换一个名字。" % char["name"]
+
+    def _rollback(d):
+        d["done"] = False
+        if d["history"] and d["history"][-1].get("role") == "assistant":
+            d["history"][-1]["content"] = reply
+
+    cst.update_draft(sid, _rollback)
+    return jsonify(ok=True, reply=reply, done=False, sid=sid, data=draft["data"])
 
 
 def _brief(chars):
@@ -505,15 +547,21 @@ def character_create():
 
 @app.route("/characters/<cid>/save", methods=["POST"])
 def character_save(cid):
-    char = cst.get(cid)
+    data = _char_form_data()
+
+    def _apply(char):
+        _fill_char(char, data, "手动修改状态")
+        if not char["name"]:
+            raise ValueError("角色名不能为空")
+        if cst.name_taken(char["name"], exclude_id=cid):
+            raise ValueError("已存在同名角色「%s」，请换一个名字" % char["name"])
+
+    try:
+        char = cst.update_character(cid, _apply)
+    except ValueError as e:
+        return redirect(url_for("characters", err=str(e)))
     if not char:
         return redirect(url_for("characters", err="角色不存在"))
-    _fill_char(char, _char_form_data(), "手动修改状态")
-    if not char["name"]:
-        return redirect(url_for("characters", err="角色名不能为空"))
-    if cst.name_taken(char["name"], exclude_id=cid):
-        return redirect(url_for("characters", err="已存在同名角色「%s」，请换一个名字" % char["name"]))
-    cst.upsert(char)
     return redirect(url_for("characters", msg=f"已保存「{char['name']}」"))
 
 
@@ -532,25 +580,37 @@ def character_chat(cid):
     msg = request.form.get("message", "").strip()
     if not msg:
         return jsonify(ok=False, detail="消息为空"), 400
-    char = cst.get(cid)
+    char = cst.get(cid)  # 无锁快照，仅作 LLM 上下文；写回走锁内 mutator
     if not char:
         return jsonify(ok=False, detail="角色不存在"), 404
-    draft = {"history": char.setdefault("chat_history", []), "data": {}}
+    draft = {"history": list(char.get("chat_history", [])), "data": {}}
     try:
         result = cl.char_chat_turn(draft, msg, char=char)
     except cl.LLMError as e:
         return jsonify(ok=False, detail=str(e)), 502
-    if draft["data"]:
-        state_before = dict(char["state"])
-        name_before = char["name"]
-        cl.apply_char_data(char, draft["data"], cst.load_chars())
-        if cst.name_taken(char["name"], exclude_id=cid):
-            char["name"] = name_before
-            result["reply"] += "（新名字与现有角色重复，未改名）"
-        if char["state"] != state_before:
-            cst.touch_state(char, "对话调整")
-    cst.upsert(char)
-    return jsonify(ok=True, reply=result["reply"], done=False, char=char)
+    new_msgs = [{"role": "user", "content": msg},
+                {"role": "assistant", "content": result["reply"]}]
+    data = {}
+    cl.merge_extracted_data(data, result["extracted"])  # 清洗抽取字段（纯函数）
+    reply_extra = ""
+
+    def _apply(c):
+        nonlocal reply_extra
+        c.setdefault("chat_history", []).extend(new_msgs)
+        if data:
+            state_before = dict(c["state"])
+            name_before = c["name"]
+            cl.apply_char_data(c, data, cst.load_chars())
+            if c["name"] != name_before and cst.name_taken(c["name"], exclude_id=cid):
+                c["name"] = name_before
+                reply_extra = "（新名字与现有角色重复，未改名）"
+            if c["state"] != state_before:
+                cst.touch_state(c, "对话调整")
+
+    char = cst.update_character(cid, _apply)
+    if not char:
+        return jsonify(ok=False, detail="角色不存在"), 404
+    return jsonify(ok=True, reply=result["reply"] + reply_extra, done=False, char=char)
 
 
 @app.route("/characters/<cid>/delete", methods=["POST"])
@@ -724,7 +784,7 @@ COMPRESS_WINDOW = 10  # 每次 LLM 调用压缩的最大章数
 def memory_compress():
     """选区压缩：勾选的章节按「连续且同卷」拆段，段内每 ≤10 章一次 LLM 调用。
 
-    逐窗落盘（先删重叠旧段再追加新段），部分失败保留已生成的段。
+    逐窗落盘（删重叠旧段与追加新段是一次原子写），部分失败保留已生成的段。
     """
     ids = request.form.getlist("chapter_ids")
     if not ids:
@@ -755,8 +815,7 @@ def memory_compress():
         except cli.LLMError as e:
             failed.append(f"{label}（{e}）")
             continue
-        mst.delete_overlapping(a, b)
-        mst.append_merged([{"from_no": a, "to_no": b, "range": label, "summary": summary}])
+        mst.replace_overlapping(a, b, [{"from_no": a, "to_no": b, "range": label, "summary": summary}])
         made += 1
     if not made and failed:
         return redirect(url_for("memory", err="压缩失败：" + "；".join(failed)))
@@ -1061,7 +1120,7 @@ def settings_models_save():
             "base_url": request.form.get(f"{slot}__base_url", "").strip(),
             "api_key": request.form.get(f"{slot}__api_key", "").strip(),
             "model": request.form.get(f"{slot}__model", "").strip(),
-            "inherit": bool(request.form.get(f"{slot}__inherit")),
+            "inherit": request.form.get(f"{slot}__inherit") == "1",
         }
         cs.save_slot(slot, data)
     return redirect(url_for("settings_models", msg="全部配置已保存"))
@@ -1094,12 +1153,8 @@ def settings_models_fetch():
 
 @app.route("/setup")
 def setup():
-    proj = ps.load_project()
-    # 首次进入时给当前步骤补一条开场白
-    if not proj["wizard"]["history"] and proj["wizard"]["step"] in lc.STEP_OPENERS:
-        proj["wizard"]["history"].append(
-            {"role": "assistant", "content": lc.STEP_OPENERS[proj["wizard"]["step"]]})
-        ps.save_project(proj)
+    # 首次进入时给当前步骤补一条开场白（锁内判空+追加+落盘，并发幂等）
+    proj = ps.ensure_wizard_opener(lc.STEP_OPENERS)
     cur = proj["wizard"]["step"]
     ids = [s[0] for s in lc.STEPS]
     cur_idx = ids.index(cur) if cur in ids else len(ids)  # "done" 视为全部完成
@@ -1112,28 +1167,28 @@ def setup_chat():
     msg = request.form.get("message", "").strip()
     if not msg:
         return jsonify(ok=False, detail="消息为空"), 400
-    proj = ps.load_project()
+    proj = ps.load_project()  # 锁外快照，仅作 LLM 上下文；写回走锁内合并
     try:
         result = lc.wizard_turn(proj, msg)
     except lc.LLMError as e:
         return jsonify(ok=False, detail=str(e)), 502
-    ps.save_project(proj)
-    return jsonify(ok=True, reply=result["reply"], step=result["step"],
-                   done=result["done"], project=proj)
+    box = {}
+
+    def _merge(p):
+        box["reply"] = lc.apply_wizard_turn(p, msg, result)
+
+    proj = ps.update_project(_merge)  # 锁内合并写回，不与并发对话互相覆盖
+    step = proj["wizard"]["step"]
+    return jsonify(ok=True, reply=box["reply"], step=step,
+                   done=step == "done", project=proj)
 
 
 @app.route("/setup/save", methods=["POST"])
 def setup_save():
-    proj = ps.load_project()
-    for k in ("title", "genre", "audience", "length", "logline", "synopsis", "style_prompt"):
-        proj[k] = request.form.get(k, "").strip()
-    for k in ("era", "rules", "stage"):
-        proj["background"][k] = request.form.get(k, "").strip()
-    if not proj["created_at"]:
-        from datetime import datetime
-        proj["created_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-    proj["wizard"]["done"] = True
-    ps.save_project(proj)
+    fields = {k: request.form.get(k, "").strip() for k in
+              ("title", "genre", "audience", "length", "logline", "synopsis", "style_prompt")}
+    background = {k: request.form.get(k, "").strip() for k in ("era", "rules", "stage")}
+    ps.save_setup_fields(fields, background)  # 锁内合并
     return redirect(url_for("dashboard"))
 
 

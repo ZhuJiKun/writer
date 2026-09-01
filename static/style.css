@@ -144,6 +144,7 @@ tr:last-child td { border-bottom: none; }
 }
 .btn.secondary { background: #fff; color: #374151; border: 1px solid var(--border); }
 .btn:hover { opacity: 0.88; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btn-inline {
   padding: 7px 14px;

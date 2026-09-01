@@ -5,8 +5,16 @@
 """
 
 import json
+import re
 
 from llm_client import LLMError, as_bool, chat, chat_json, llm_available
+
+_WS_RE = re.compile(r"\s+")
+
+
+def count_words(text):
+    """网文/Word 口径的「字数」：去掉空白字符后的字符数（含标点）。"""
+    return len(_WS_RE.sub("", text or ""))
 
 
 def _require_llm():
@@ -282,7 +290,7 @@ def critic_review(ctx_brief, no, title, text, min_words):
         "通过标准：无一致性/逻辑硬伤、细纲基本覆盖、字数达标。问题要具体（指出哪里、为什么）。\n"
         "只输出 JSON：{\"pass\":true或false,\"score\":1到10的整数,\"issues\":[{\"type\":\"检查项\",\"detail\":\"问题描述\"}]}\n\n"
         "【作品上下文】\n%s"
-        % (no, title, len(text), min_words, ctx_brief)
+        % (no, title, count_words(text), min_words, ctx_brief)
     )
     data = chat_json(sys_prompt, [{"role": "user", "content": "【待审校正文】\n" + text}],
                      slot="critic")

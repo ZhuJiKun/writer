@@ -69,28 +69,42 @@ def slot_available(slot):
 
 
 def wizard_turn(project, user_msg):
-    """处理一轮对话，就地更新 project。返回 {reply, step, done}；失败抛出 LLMError。"""
+    """只读 project 快照做一轮向导对话的 LLM 计算（不修改 project）。
+
+    返回 {"reply", "extracted", "advance", "step"}（step 是本轮发起时所处的向导步骤）；
+    消息追加 / 抽取应用 / 步骤推进由 apply_wizard_turn 在锁内完成。失败抛出 LLMError。
+    """
     if not llm_available():
         raise LLMError("未配置生成模型，请先到「模型配置」页填写 generation 槽位")
     wiz = project["wizard"]
     step = wiz["step"]
-    history = wiz["history"]
-    history.append({"role": "user", "content": user_msg})
-
+    history = wiz["history"] + [{"role": "user", "content": user_msg}]
     result = _llm_turn(step, history)
+    return {"reply": result.get("reply", "").strip(),
+            "extracted": result.get("extracted") or {},
+            "advance": as_bool(result.get("advance")),
+            "step": step}
 
-    _apply_extraction(project, step, result.get("extracted") or {})
 
-    reply = result.get("reply", "").strip()
-    if result.get("advance") and step != "done":
-        wiz["step"] = step = _next_step(step)
+def apply_wizard_turn(project, user_msg, result):
+    """把 wizard_turn 的结果合并进 project（须在 project_store 锁内调用），返回最终回复。
+
+    追加对话消息、按发起时的步骤应用抽取；仅当当前步骤未被并发请求推进过时才推进
+    步骤，防止两轮并发对话连跳两步。
+    """
+    wiz = project["wizard"]
+    wiz["history"].append({"role": "user", "content": user_msg})
+    _apply_extraction(project, result["step"], result.get("extracted") or {})
+    reply = result["reply"]
+    step = wiz["step"]
+    if result.get("advance") and step == result["step"] and step != "done":
+        step = wiz["step"] = _next_step(step)
         if step == "done":
             reply += "\n\n全部信息收集完毕 🎉 请在下方核对配置，点击「保存建档」完成初始化。"
         else:
             reply += "\n\n" + STEP_OPENERS[step]
-    history.append({"role": "assistant", "content": reply})
-
-    return {"reply": reply, "step": step, "done": step == "done"}
+    wiz["history"].append({"role": "assistant", "content": reply})
+    return reply
 
 
 def _next_step(step):

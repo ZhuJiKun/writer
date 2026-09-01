@@ -53,17 +53,58 @@ def active_task():
     return None
 
 
-def _new_task(kind, total):
+def _new_task_locked(kind, total):
+    """在 _LOCK 内调用：淘汰最旧的已结束任务并创建新任务。"""
     tid = "t_" + uuid.uuid4().hex[:8]
+    finished = sorted((t for t in TASKS.values() if t.get("status") != "running"),
+                      key=lambda t: t.get("finished_at") or "")
+    for t in finished[:-MAX_FINISHED_KEPT]:
+        TASKS.pop(t["id"], None)
+    TASKS[tid] = {"id": tid, "kind": kind, "status": "running",
+                  "total": total, "done": 0, "fail": 0, "current": "",
+                  "logs": [], "started_at": _now(), "finished_at": ""}
+    return tid
+
+
+def reserve_task(kind, total):
+    """原子地完成「检查无运行任务 + 占用任务槽」（同一把锁内），已有任务运行时返回 None。
+
+    占槽成功后必须 launch_task 启动线程；若启动前的数据写入失败，调 abort_task 释放槽位。
+    """
     with _LOCK:
-        # 淘汰最旧的已结束任务，避免长会话内存只增不减
-        finished = sorted((t for t in TASKS.values() if t.get("status") != "running"),
-                          key=lambda t: t.get("finished_at") or "")
-        for t in finished[:-MAX_FINISHED_KEPT]:
-            TASKS.pop(t["id"], None)
-        TASKS[tid] = {"id": tid, "kind": kind, "status": "running",
-                      "total": total, "done": 0, "fail": 0, "current": "",
-                      "logs": [], "started_at": _now(), "finished_at": ""}
+        for t in TASKS.values():
+            if t.get("status") == "running":
+                return None
+        return _new_task_locked(kind, total)
+
+
+def launch_task(tid, kind, chapter_ids):
+    """为已占槽的任务启动后台线程。"""
+    threading.Thread(target=_run_guarded, args=(tid, kind, chapter_ids), daemon=True).start()
+
+
+def abort_task(tid, reason=""):
+    """占槽后、启动前失败：记录原因并落到失败终态，释放任务槽。"""
+    if reason:
+        _log(tid, reason)
+    _finish(tid, "error")
+
+
+def start_generate(chapter_ids):
+    """启动生成任务（章节按全局章号顺序处理）。已有任务运行时返回 None。"""
+    tid = reserve_task("generate", len(chapter_ids))
+    if tid is None:
+        return None
+    launch_task(tid, "generate", chapter_ids)
+    return tid
+
+
+def start_adopt(chapter_ids):
+    """启动采纳任务。已有任务运行时返回 None。"""
+    tid = reserve_task("adopt", len(chapter_ids))
+    if tid is None:
+        return None
+    launch_task(tid, "adopt", chapter_ids)
     return tid
 
 
@@ -82,23 +123,6 @@ def _finish(tid, status):
         t["status"] = status
         t["current"] = ""
         t["finished_at"] = _now()
-
-
-def start_generate(chapter_ids):
-    """启动生成任务（章节按全局章号顺序处理）。已有任务运行时返回 None。"""
-    if active_task():
-        return None
-    tid = _new_task("generate", len(chapter_ids))
-    threading.Thread(target=_run_guarded, args=(tid, "generate", chapter_ids), daemon=True).start()
-    return tid
-
-
-def start_adopt(chapter_ids):
-    if active_task():
-        return None
-    tid = _new_task("adopt", len(chapter_ids))
-    threading.Thread(target=_run_guarded, args=(tid, "adopt", chapter_ids), daemon=True).start()
-    return tid
 
 
 def _run_guarded(tid, kind, chapter_ids):
@@ -300,7 +324,7 @@ def _run_generate(tid, chapter_ids):
             task["done"] = i + 1
             continue
         # 正文是昂贵产物：先落盘再审校；审校/重写失败都保留正文为草稿
-        hst.set_status(cid, hst.ST_REVIEWING, content=text, word_count=len(text))
+        hst.set_status(cid, hst.ST_REVIEWING, content=text, word_count=cli.count_words(text))
         review = {"rounds": 0, "final": None, "history": []}
         passed = False
         review_err = ""
@@ -309,7 +333,7 @@ def _run_generate(tid, chapter_ids):
                 task["current"] = label + " · 审校（第 %d 轮）" % (round_no + 1)
                 hst.set_status(cid, hst.ST_REVIEWING)
                 result = cli.critic_review(ctx["text"], no, ch["title"], text, min_words)
-                wc = len(text)
+                wc = cli.count_words(text)
                 result["word_count"] = wc
                 # 字数不足也记入审校历史，保证「记录页可见的问题」与「驱动重写的问题」一致
                 if wc < min_words:
@@ -333,17 +357,17 @@ def _run_generate(tid, chapter_ids):
                         review_err = "重写失败：" + str(e)
                         _log(tid, "%s：重写失败，保留上一版正文 — %s" % (label, e))
                         break
-                    hst.set_status(cid, hst.ST_REVIEWING, content=text, word_count=len(text))
+                    hst.set_status(cid, hst.ST_REVIEWING, content=text, word_count=cli.count_words(text))
         except LLMError as e:
             review_err = "审校调用失败：" + str(e)
             _log(tid, "%s：审校调用失败（正文已保留为草稿）— %s" % (label, e))
         if review["history"]:
             review["final"] = review["history"][-1]
-        hst.set_status(cid, hst.ST_DRAFT, content=text, word_count=len(text),
+        hst.set_status(cid, hst.ST_DRAFT, content=text, word_count=cli.count_words(text),
                        review=review, error=review_err)
         ok += 1
         if passed:
-            _log(tid, "%s：完成（约 %d 字）" % (label, len(text)))
+            _log(tid, "%s：完成（约 %d 字）" % (label, cli.count_words(text)))
         elif review_err:
             _log(tid, "%s：%s（可在列表中勾选后重新生成）" % (label, review_err))
         else:
@@ -409,7 +433,8 @@ def _apply_adoption(cid, no, vol_title, title, entry, data):
     # 1. 分层记忆：逐章摘要升级为正文来源
     mst.upsert_chapter_summary(cid, no, vol_title, title, data["summary"], mst.SOURCE_TEXT)
     changes.append("摘要已写入逐章摘要层")
-    # 2. 角色状态：只更新发生变化的键。重名角色不回写（按名匹配无法区分，宁缺毋错）
+    # 2. 角色状态：只更新发生变化的键。重名角色不回写（按名匹配无法区分，宁缺毋错）。
+    # 实际「读-改-写」在 cst.apply_state_updates 的锁内完成，避免与手动编辑互相覆盖。
     chars = [c for c in cst.load_chars() if c.get("name")]
     name_count = {}
     for c in chars:
@@ -417,6 +442,7 @@ def _apply_adoption(cid, no, vol_title, title, entry, data):
     by_name = {c["name"]: c for c in chars if name_count[c["name"]] == 1}
     n_state = 0
     skipped_dup = set()
+    note = "第%d章《%s》采纳" % (no, title)
     for cu in data["character_updates"]:
         if name_count.get(cu["name"], 0) > 1:
             skipped_dup.add(cu["name"])
@@ -424,15 +450,7 @@ def _apply_adoption(cid, no, vol_title, title, entry, data):
         char = by_name.get(cu["name"])
         if not char:
             continue
-        changed = False
-        for k, v in cu["state"].items():
-            if k in char.get("state", {}) and v and char["state"].get(k) != v:
-                char["state"][k] = v
-                changed = True
-                n_state += 1
-        if changed:
-            cst.touch_state(char, "第%d章《%s》采纳" % (no, title))
-            cst.upsert(char)
+        n_state += cst.apply_state_updates(char["id"], cu["state"], note)
     if n_state:
         changes.append("角色状态更新 %d 项" % n_state)
     for name in sorted(skipped_dup):

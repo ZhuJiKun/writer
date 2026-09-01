@@ -112,9 +112,13 @@ fillData({{ {'name': char.name, 'gender': char.gender, 'personality': char.perso
               'state': char.state} | tojson }});
 {% endif %}
 
+let sending = false;  // 发送期间禁用，避免并发请求互相覆盖对话历史/草稿
 async function sendMsg() {
   const msg = chatInput.value.trim();
-  if (!msg) return;
+  if (!msg || sending) return;
+  sending = true;
+  const sendBtn = document.getElementById('chat-send');
+  sendBtn.disabled = true;
   chatInput.value = '';
   addBubble('user', msg);
   chatStatus.textContent = '对方思考中…';
@@ -139,6 +143,10 @@ async function sendMsg() {
     }
   } catch (e) {
     chatStatus.textContent = '❌ 请求失败：' + e;
+  } finally {
+    sending = false;
+    sendBtn.disabled = false;
+    chatInput.focus();
   }
 }
 

@@ -127,7 +127,12 @@ async function fetchModels(slot) {
     const r = await postJSON("{{ url_for('settings_models_fetch') }}", slotData(slot));
     if (r.ok) {
       const dl = document.getElementById(slot + '__model_list');
-      dl.innerHTML = r.models.map(m => `<option value="${m}">`).join('');
+      dl.replaceChildren();
+      r.models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        dl.appendChild(opt);
+      });
       setStatus(st, true, r.detail + '，点击模型名输入框选择');
       document.getElementById(slot + '__model').focus();
     } else {

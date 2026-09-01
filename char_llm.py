@@ -41,30 +41,31 @@ def generate_protagonist(project):
 
 
 def char_chat_turn(draft, user_msg, char=None):
-    """对话式创建（char=None）或调整（char 为现有角色）角色。
+    """对话式创建（char=None）或调整（char 为现有角色）角色的一轮 LLM 计算。
 
-    draft: {"history": [...], "data": {...}}，就地更新。
-    返回 {"reply", "done"}；done=True 时 draft["data"] 已齐可入库。失败抛 LLMError。
+    只读 draft 快照（{"history": [...], "data": {...}}），不做任何修改；
+    返回 {"reply", "done", "extracted"}：extracted 是本轮抽取的字段增量，
+    消息追加与字段合并由调用方在锁内完成（见 merge_extracted_data）。
+    done=True 表示档案已齐可入库。失败抛 LLMError。
     """
     if not llm_available():
         raise LLMError("未配置生成模型，请先到「模型配置」页填写 generation 槽位")
-    history = draft["history"]
-    history.append({"role": "user", "content": user_msg})
-
-    sys_prompt = _build_chat_sys(char)
-    data = chat_json(sys_prompt, history[-12:])
+    history = draft.get("history", []) + [{"role": "user", "content": user_msg}]
+    data = chat_json(_build_chat_sys(char), history[-12:])
 
     reply = str(data.get("reply", "")).strip()
     extracted = data.get("extracted") if isinstance(data.get("extracted"), dict) else {}
-    if extracted:
-        _merge_extracted(draft["data"], extracted)
     done = as_bool(data.get("done"))
-    if done and not draft["data"].get("name"):
+    if done and not ((draft.get("data") or {}).get("name") or extracted.get("name")):
         done = False
         reply = reply or "还差最关键的一步：这个角色叫什么名字？"
-    draft["done"] = done
-    history.append({"role": "assistant", "content": reply})
-    return {"reply": reply, "done": done}
+    return {"reply": reply, "done": done, "extracted": extracted}
+
+
+def merge_extracted_data(data, extracted):
+    """把一轮对话抽取的字段增量清洗后合并进 data（纯函数，供锁内 mutator 调用）。"""
+    if extracted:
+        _merge_extracted(data, extracted)
 
 
 def _roster(exclude_id=None):

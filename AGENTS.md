@@ -24,13 +24,15 @@
 - `json_store.py` 是基础设施：`lock_for(path)` 每文件 RLock、`@synchronized(lock)` 装饰器、`read_json`（损坏文件改名 `.corrupt-<时间戳>` 留底）、`write_json`（tmp + `os.replace` 原子写）。
 - **所有 store 的写操作（mutator）必须加 `@synchronized(_LOCK)`**，后台写作线程与请求线程会并发读写同一 JSON。新增 store 时照抄现有 9 个的写法。
 - 9 个 store 与数据文件一一对应：project / config / character / outline / chapters / memory / bible / foreshadow / style（见 README 数据文件表）。
-- `character_store.py` 有 `characters_bck/` 自动备份（近 1 个月），和 `name_taken()` 查重——**角色姓名必须全局唯一**，创建/编辑/生成入口都已拦截重名，新增入口也要调它。
+- `character_store.py` 有 `characters_bck/` 自动备份（近 1 个月，**限流 120 秒一次**，高频保存不会产生副本爆炸），和 `name_taken()` 查重——**角色姓名必须全局唯一**，创建/编辑/生成入口都已拦截重名，新增入口也要调它。
+- 跨函数的「读-改-写」也要收进锁内 mutator（如 `character_store.apply_state_updates`、`character_store.update_character`、`character_store.update_draft`、`memory_store.replace_overlapping`、`project_store.ensure_wizard_opener`、`project_store.update_project`），不要在锁外读快照、改完再 upsert——会与并发请求互相覆盖。例外：LLM 调用必须先在锁外拿快照做上下文，写回再走锁内 mutator（见 `character_chat` / `character_new_chat` / `setup_chat`）。
+- **聊天流的统一模式**：LLM 层的对话函数只做纯计算、不就地改数据——`llm_client.wizard_turn` / `char_llm.char_chat_turn` 只读快照并返回 `{reply, extracted, ...}` 增量；路由把「追加消息 + 合并 extracted + 状态推进」交给锁内 mutator（`apply_wizard_turn` 经 `update_project`；草稿经 `update_draft`，建档经 `promote_draft`——锁内重检姓名唯一、建档与清草稿原子完成）。`apply_wizard_turn` 仅在当前步骤未被并发推进时才推进步骤，防止连跳。聊天页面前端必须在请求期间禁用发送按钮（setup.html / character_chat.html 的 `sending` 守卫）。
 
 ### 写作流水线
 
-- `write_engine.py`：编排核心，带详细 docstring（上下文组装原则务必先读）。内存任务表 `TASKS`：同时只允许一个 running 任务（`active_task()` 前置检查），已结束任务最多保留 20 条自动淘汰；终态判定是「done 计数满 **且** fail==0」才算成功。
+- `write_engine.py`：编排核心，带详细 docstring（上下文组装原则务必先读）。内存任务表 `TASKS`：同时只允许一个 running 任务，**占槽必须走 `reserve_task()`（检查+创建在同一把锁内原子完成）**，之后 `launch_task()` 起线程；占槽后若数据写盘失败要 `abort_task()` 释放槽位。路由侧的正确顺序是「先 reserve 再写盘再 launch」（见 `chapter_confirm`）。已结束任务最多保留 20 条自动淘汰；终态判定是「done 计数满 **且** fail==0」才算成功。
 - 审校不通过自动重写，`MAX_REVISE_ROUNDS = 2`（最多 3 版正文）；字数不足的 issue 会写入审校历史。
-- 采纳（`_apply_adoption`）回写 4 个 store：逐章摘要、伏笔、角色状态、章节状态；角色按名匹配时剔除重名。
+- 采纳（`_apply_adoption`）回写 4 个 store：逐章摘要、伏笔、角色状态、章节状态；角色按名匹配时剔除重名，状态更新走 `cst.apply_state_updates`（锁内完成）。
 
 ### 路由
 
@@ -39,6 +41,8 @@
 ## 约定与坑
 
 - **XSS**：模板里展示 LLM/用户多行文本用 `{{ m.content | nl2br }}`（`app.py` 里注册的过滤器）。实现细节：必须先 `escape` 再对**纯字符串**做 `replace("\n","<br>")`——`Markup.replace` 会把替换内容也转义，别改回去。
+- **JS 侧的 DOM 注入**：`tojson` 只保证 `<script>` 块内安全，JS 解析回原始字符后再拼进 `innerHTML` 会恢复 HTML 语义。凡把用户/LLM 可控字符串插进 DOM，一律 `createElement` + `textContent` / `value`，不要用 `innerHTML` 拼接（参见 `character_edit.html` 的 `addRelRow`、`settings_models.html` 的 datalist）。
+- **字数统计**：统一用 `content_llm.count_words(text)`（去空白、含标点，对齐 Word/网文平台口径），不要 `len(text)`（换行/空格会虚高，导致 min_words 校验偏松）。
 - **表单布尔**：checkbox 取值用显式比较（`== "1"`），不要 `bool(request.form.get(...))`（`"0"` 也是真值）。
 - 用户提示文案里带 `%d` 占位的，确认 `%` 参数齐全。
 - 删除卷/章节只清大纲；`chapters.json` 孤儿靠进工作台时 `remove_orphans` 自愈，memory 孤儿靠手动「从大纲同步」——这是有意的时滞设计，不是 bug。
