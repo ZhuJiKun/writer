@@ -4,7 +4,7 @@
 
 ## 项目形态
 
-- 单体 Flask 应用（服务端渲染 Jinja2 模板），**不是 git 仓库，无版本控制，改动无回滚手段**——改前先读文件确认现状，不要覆盖式重写。
+- 单体 Flask 应用（服务端渲染 Jinja2 模板）。已是 git 仓库（GitHub: ZhuJiKun/writer，main 分支）；用户数据 JSON 被 .gitignore 排除，**绝不提交**。
 - 运行环境：macOS，Python 3 + Flask，依赖仅 `flask`（`markupsafe` 随其安装）。HTTP 请求用标准库 `urllib`，没有 requests/openai SDK。
 - 入口 `app.py`；**端口默认 5001**（5000 被 macOS ControlCenter 占用，curl 5000 返回 403 是系统行为，不是应用故障）。`WRITER_PORT` 环境变量可覆盖。
 - 后台 nohup 启动时 Werkzeug reloader 自动关闭（stdin 非终端），**改完代码必须重启进程**：`pkill -f "python3 app.py"; nohup python3 app.py > /tmp/writer_server.log 2>&1 &`。
