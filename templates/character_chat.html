@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}{{ '对话创建配角' if mode == 'create' else '对话调整 · ' + char.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ '💬 对话创建配角' if mode == 'create' else '💬 对话调整 · ' + char.name }}</h1>
+  <p class="subtitle">
+    {% if mode == 'create' %}和 LLM 聊聊这个新配角：姓名、性别、性格、背景、与主角的关系……信息够了它会自动建档。
+    {% else %}直接用自然语言告诉 LLM 要改什么，例如「把当前目标改成追查灰册」「他现在左肩有伤」。{% endif %}
+  </p>
+  <p class="mt">
+    {% if llm_on %}<span class="badge green">LLM 已接入</span>
+    {% else %}<span class="badge red">未配置生成模型，请先到「模型配置」填写</span>{% endif %}
+  </p>
+</div>
+
+<div class="chat-layout">
+  <div class="card chat-card">
+    <h2>对话</h2>
+    <div class="chat-log" id="chat-log">
+      {% for m in history %}
+      <div class="bubble-row {{ 'user' if m.role == 'user' else 'assistant' }}">
+        <div class="bubble">{{ m.content | nl2br }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="chat-input-row">
+      <input type="text" id="chat-input" autocomplete="off" placeholder="输入回答，回车发送…">
+      <button class="btn" id="chat-send" onclick="sendMsg()">发送</button>
+    </div>
+    <div class="muted" id="chat-status" style="margin-top:8px"></div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>{{ '角色档案（实时抽取）' if mode == 'create' else '当前档案（对话后自动更新）' }}</h2>
+      <div class="profile-grid readonly-grid">
+        <label>姓名</label><input type="text" id="f_name" readonly>
+        <label>性别</label><input type="text" id="f_gender" readonly>
+        <label>性格</label><textarea id="f_personality" rows="2" readonly></textarea>
+        <label>背景</label><textarea id="f_background" rows="2" readonly></textarea>
+        <label>外貌</label><textarea id="f_appearance" rows="2" readonly></textarea>
+      </div>
+      <table class="mt">
+        <tr><th style="width:120px">状态项</th><th>当前值</th></tr>
+        {% for k in ['位置', '身体状态', '心理状态', '当前目标', '已知秘密', '持有物/能力'] %}
+        <tr><td><b>{{ k }}</b></td><td id="f_state_{{ k }}">—</td></tr>
+        {% endfor %}
+      </table>
+      <div class="muted mt" id="f_rels"></div>
+    </div>
+    {% if mode == 'create' %}
+    <div class="save-bar" id="done-bar" style="display:none">
+      <span>✅ 角色已创建入库</span>
+      <a class="btn" href="{{ url_for('characters') }}">返回角色列表</a>
+    </div>
+    {% else %}
+    <div class="save-bar">
+      <a class="btn secondary" href="{{ url_for('characters') }}">返回角色列表</a>
+      <a class="btn-inline" href="{{ url_for('character_edit', cid=char.id) }}">去手动编辑</a>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+const MODE = {{ mode | tojson }};
+const CHAT_URL = {{ (url_for('character_new_chat') if mode == 'create' else url_for('character_chat', cid=char.id)) | tojson }};
+const STATE_KEYS = ['位置', '身体状态', '心理状态', '当前目标', '已知秘密', '持有物/能力'];
+let sid = {{ (sid or "") | tojson }};
+
+const chatLog = document.getElementById('chat-log');
+const chatInput = document.getElementById('chat-input');
+const chatStatus = document.getElementById('chat-status');
+
+function addBubble(role, text) {
+  const row = document.createElement('div');
+  row.className = 'bubble-row ' + role;
+  const b = document.createElement('div');
+  b.className = 'bubble';
+  b.textContent = text;
+  row.appendChild(b);
+  chatLog.appendChild(row);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+function setVal(id, v) {
+  const el = document.getElementById(id);
+  if (el && v !== undefined && v !== null && v !== '') el.value = v;
+}
+
+function fillData(d) {
+  setVal('f_name', d.name); setVal('f_gender', d.gender);
+  setVal('f_personality', d.personality); setVal('f_background', d.background);
+  setVal('f_appearance', d.appearance);
+  const st = d.state || {};
+  for (const k of STATE_KEYS) {
+    const el = document.getElementById('f_state_' + k);
+    if (el && st[k]) el.textContent = st[k];
+  }
+  const rels = d.relationships || [];
+  if (rels.length) {
+    document.getElementById('f_rels').textContent =
+      '关系：' + rels.map(r => `${d.name || '该角色'} → ${r.target_name || '?'}：${r.relation}`).join('；');
+  }
+}
+
+{% if mode == 'create' %}
+fillData({{ data | tojson }});
+{% else %}
+fillData({{ {'name': char.name, 'gender': char.gender, 'personality': char.personality,
+              'background': char.background, 'appearance': char.appearance,
+              'state': char.state} | tojson }});
+{% endif %}
+
+async function sendMsg() {
+  const msg = chatInput.value.trim();
+  if (!msg) return;
+  chatInput.value = '';
+  addBubble('user', msg);
+  chatStatus.textContent = '对方思考中…';
+  try {
+    const body = {message: msg};
+    if (MODE === 'create') body.sid = sid;
+    const resp = await fetch(CHAT_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: new URLSearchParams(body),
+    });
+    const r = await resp.json();
+    if (!r.ok) { addBubble('assistant', '❌ ' + (r.detail || '请求失败')); chatStatus.textContent = ''; return; }
+    addBubble('assistant', r.reply);
+    chatStatus.textContent = '';
+    if (MODE === 'create') {
+      sid = r.sid;
+      fillData(r.data);
+      if (r.done) document.getElementById('done-bar').style.display = 'flex';
+    } else if (r.char) {
+      fillData(r.char);
+    }
+  } catch (e) {
+    chatStatus.textContent = '❌ 请求失败：' + e;
+  }
+}
+
+chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendMsg(); });
+chatLog.scrollTop = chatLog.scrollHeight;
+</script>
+{% endblock %}

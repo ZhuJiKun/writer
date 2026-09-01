@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}审校循环{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>审校循环</h1>
+  <p class="subtitle">初稿 → Critic 检查（一致性 / 逻辑 / 细纲覆盖 / 文风 / 伏笔 / 字数）→ 问题清单 → 重写 → 复审。以下为各章最终审校记录</p>
+</div>
+
+<div class="grid-3">
+  <div class="stat"><div class="num">{{ stats.total }}</div><div class="label">已审校章节</div></div>
+  <div class="stat"><div class="num">{{ stats.first_pass }}</div><div class="label">首轮即通过</div></div>
+  <div class="stat"><div class="num">{{ stats.avg }}</div><div class="label">平均得分</div></div>
+</div>
+
+{% if stats.failed %}
+<div class="alert mt">⚠️ {{ stats.failed }} 章审校未完全通过（仍保留为草稿），可到写作工作台勾选后重新生成。</div>
+{% endif %}
+
+<div class="card mt">
+  <h2>审校记录</h2>
+  {% if not rows %}
+  <p class="muted">还没有审校记录。到「写作工作台」生成章节后，每章的 Critic 检查结果会汇总在这里。</p>
+  {% else %}
+  <table>
+    <tr>
+      <th style="width:48px">章号</th><th style="width:90px">卷</th><th>章节</th>
+      <th style="width:70px">结果</th><th style="width:60px">得分</th><th style="width:60px">轮次</th>
+      <th>主要问题</th><th style="width:130px">时间</th>
+    </tr>
+    {% for r in rows %}
+    <tr>
+      <td class="cell-center">{{ r.no }}</td>
+      <td class="muted">{{ r.vol }}</td>
+      <td><b>{{ r.title }}</b> <span class="badge gray">{{ r.status_label }}</span></td>
+      <td><span class="badge {{ 'green' if r.final.pass else 'red' }}">{{ '通过' if r.final.pass else '未通过' }}</span></td>
+      <td class="cell-center">{{ r.final.score }}</td>
+      <td class="cell-center">{{ r.rounds }}</td>
+      <td>
+        {% if r.final.issues %}
+        {% for it in r.final.issues[:2] %}<p class="muted" style="margin:1px 0">[{{ it.type }}] {{ it.detail }}</p>{% endfor %}
+        {% if r.final.issues|length > 2 %}<p class="muted" style="margin:1px 0">…共 {{ r.final.issues|length }} 个</p>{% endif %}
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+      <td class="muted">{{ r.updated_at }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted mt">点击工作台章节行的「阅读」可查看单章完整审校明细与历史轮次。</p>
+  {% endif %}
+</div>
+{% endblock %}

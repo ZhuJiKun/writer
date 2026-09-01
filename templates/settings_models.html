@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}模型配置{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>模型配置</h1>
+  <p class="subtitle">统一走 OpenAI 兼容接口。按任务槽位分配不同档位模型，控制成本。配置保存在本地 config.json。</p>
+</div>
+
+{% if msg %}
+<div class="toast-ok">✅ {{ msg }}</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('settings_models_save') }}" id="settings-form">
+  {% for slot_id, slot in slots.items() %}
+  {% set s = cfg[slot_id] %}
+  {% set eff = effective[slot_id] %}
+  <div class="card slot-card">
+    <div class="slot-head">
+      <h2>{{ slot.name }}</h2>
+      <p class="muted">{{ slot.desc }}</p>
+    </div>
+
+    {% if slot_id != 'generation' %}
+    <label class="inherit-row">
+      <input type="checkbox" id="{{ slot_id }}__inherit" name="{{ slot_id }}__inherit" value="1"
+             {% if s.inherit %}checked{% endif %}
+             onchange="toggleInherit('{{ slot_id }}')">
+      与「正文生成」使用相同配置
+    </label>
+    <p class="muted inherit-hint" id="{{ slot_id }}__eff" {% if not s.inherit %}style="display:none"{% endif %}>
+      当前生效：{{ eff.base_url or '（未配置）' }} · {{ eff.model or '（未配置）' }}
+    </p>
+    {% endif %}
+
+    <div class="slot-fields" id="{{ slot_id }}__fields"
+         {% if slot_id != 'generation' and s.inherit %}style="display:none"{% endif %}>
+      <div class="field-row">
+        <label>服务商预设</label>
+        <select id="{{ slot_id }}__preset" name="{{ slot_id }}__preset"
+                onchange="const u = PRESET_URLS[this.value]; if (u !== undefined) document.getElementById('{{ slot_id }}__base_url').value = u;">
+          {% for pid, p in presets.items() %}
+          <option value="{{ pid }}" {% if s.preset == pid %}selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field-row">
+        <label>Base URL</label>
+        <input type="text" id="{{ slot_id }}__base_url" name="{{ slot_id }}__base_url"
+               value="{{ s.base_url }}" placeholder="https://api.example.com/v1">
+      </div>
+      <div class="field-row">
+        <label>API Key</label>
+        <input type="password" id="{{ slot_id }}__api_key" name="{{ slot_id }}__api_key" value=""
+               placeholder="{% if s.api_key %}已保存 {{ mask(s.api_key) }}，留空表示不修改{% else %}sk-...{% endif %}">
+      </div>
+      <div class="field-row">
+        <label>模型名</label>
+        <input type="text" id="{{ slot_id }}__model" name="{{ slot_id }}__model"
+               value="{{ s.model }}" list="{{ slot_id }}__model_list"
+               placeholder="{{ presets[s.preset].model_hint }}" autocomplete="off">
+        <datalist id="{{ slot_id }}__model_list"></datalist>
+        <button type="button" class="btn-inline" onclick="fetchModels('{{ slot_id }}')">📋 拉取模型列表</button>
+        <button type="button" class="btn-inline" onclick="testConn('{{ slot_id }}')">🔌 测试连接</button>
+        <span class="inline-status" id="{{ slot_id }}__fetch_status"></span>
+        <span class="inline-status" id="{{ slot_id }}__test_status"></span>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="save-bar">
+    <button type="submit" class="btn">💾 保存全部配置</button>
+    <span class="muted">API Key 留空表示保留已保存的 key</span>
+  </div>
+</form>
+
+<script>
+const PRESET_URLS = Object.fromEntries(
+  Object.entries({{ presets | tojson | safe }}).map(([k, v]) => [k, v.base_url])
+);
+
+function toggleInherit(slot) {
+  const checked = document.getElementById(slot + '__inherit').checked;
+  document.getElementById(slot + '__fields').style.display = checked ? 'none' : '';
+  const eff = document.getElementById(slot + '__eff');
+  if (eff) eff.style.display = checked ? '' : 'none';
+}
+
+function slotData(slot) {
+  return {
+    slot: slot,
+    base_url: document.getElementById(slot + '__base_url')?.value || '',
+    api_key: document.getElementById(slot + '__api_key')?.value || '',
+    model: document.getElementById(slot + '__model')?.value || '',
+  };
+}
+
+async function postJSON(url, data) {
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: new URLSearchParams(data),
+  });
+  return resp.json();
+}
+
+function setStatus(el, ok, text) {
+  el.textContent = (ok === null ? '' : ok ? '✅ ' : '❌ ') + text;
+  el.className = 'inline-status ' + (ok === null ? '' : ok ? 'ok' : 'err');
+}
+
+async function testConn(slot) {
+  const st = document.getElementById(slot + '__test_status');
+  setStatus(st, null, '测试中…');
+  try {
+    const r = await postJSON("{{ url_for('settings_models_test') }}", slotData(slot));
+    setStatus(st, r.ok, r.detail);
+  } catch (e) {
+    setStatus(st, false, '请求失败：' + e);
+  }
+}
+
+async function fetchModels(slot) {
+  const st = document.getElementById(slot + '__fetch_status');
+  setStatus(st, null, '拉取中…');
+  try {
+    const r = await postJSON("{{ url_for('settings_models_fetch') }}", slotData(slot));
+    if (r.ok) {
+      const dl = document.getElementById(slot + '__model_list');
+      dl.innerHTML = r.models.map(m => `<option value="${m}">`).join('');
+      setStatus(st, true, r.detail + '，点击模型名输入框选择');
+      document.getElementById(slot + '__model').focus();
+    } else {
+      setStatus(st, false, r.detail);
+    }
+  } catch (e) {
+    setStatus(st, false, '请求失败：' + e);
+  }
+}
+</script>
+{% endblock %}

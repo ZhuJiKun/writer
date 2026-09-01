@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}角色列表{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>角色列表</h1>
+  <p class="subtitle">静态档案（性格 / 背景 / 外貌）+ 动态状态（随情节推进更新，可追溯变更历史）+ 关系网</p>
+  <p class="mt">
+    {% if llm_on %}<span class="badge green">LLM 已接入</span>
+    {% else %}<span class="badge red">未配置生成模型</span>{% endif %}
+    {% if has_protagonist %}<span class="badge">主角已就位</span>{% endif %}
+  </p>
+</div>
+
+{% if err %}<div class="alert">❌ {{ err }}</div>{% endif %}
+{% if msg %}<div class="toast-ok">✅ {{ msg }}</div>{% endif %}
+
+{% if not wizard_done %}
+<div class="card setup-banner">
+  <div>
+    <h2>还没有作品档案</h2>
+    <p class="muted">先完成新书向导建档，之后可以从档案一键生成主角。</p>
+  </div>
+  <a class="btn" href="{{ url_for('setup') }}">去建档</a>
+</div>
+{% endif %}
+
+<div class="action-bar">
+  <form method="post" action="{{ url_for('generate_protagonist') }}"
+        {% if has_protagonist %}onsubmit="return confirm('已有主角，重新生成将覆盖其档案（保留对话记录）。继续？');"{% endif %}>
+    <button type="submit" class="btn">✨ 从档案生成主角</button>
+  </form>
+  <a class="btn secondary" href="{{ url_for('character_new') }}">💬 对话创建配角</a>
+  <a class="btn secondary" href="{{ url_for('character_new_manual') }}">＋ 手动添加</a>
+</div>
+
+{% if not characters %}
+<div class="card"><p class="muted">还没有角色。用上方按钮生成主角或创建配角。</p></div>
+{% endif %}
+
+{% for c in characters %}
+<div class="card">
+  <div class="char-head">
+    <h2>{{ c.name }}
+      <span class="badge">{{ c.role_type }}</span>
+      {% if c.gender %}<span class="badge gray">{{ c.gender }}</span>{% endif %}
+      <span class="badge {{ 'green' if c.source == 'wizard' else ('yellow' if c.source == 'dialog' else 'gray') }}">
+        {{ {'wizard': '档案生成', 'dialog': '对话创建', 'manual': '手动添加'}.get(c.source, c.source) }}
+      </span>
+    </h2>
+    <div class="char-actions">
+      <a class="btn-inline" href="{{ url_for('character_edit', cid=c.id) }}">编辑</a>
+      <a class="btn-inline" href="{{ url_for('character_adjust', cid=c.id) }}">💬 对话调整</a>
+      <form method="post" action="{{ url_for('character_delete', cid=c.id) }}"
+            onsubmit="return confirm('确定删除角色「{{ c.name }}」？相关关系会一并清理。');">
+        <button type="submit" class="btn-inline danger">删除</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="kv">
+    {% if c.personality %}<p><b>性格</b>{{ c.personality }}</p>{% endif %}
+    {% if c.background %}<p><b>背景</b>{{ c.background }}</p>{% endif %}
+    {% if c.appearance %}<p><b>外貌</b>{{ c.appearance }}</p>{% endif %}
+  </div>
+
+  <table class="mt">
+    <tr><th style="width:120px">状态项</th><th>当前值</th></tr>
+    {% for k, v in c.state.items() %}
+    <tr><td><b>{{ k }}</b></td><td>{{ v or '—' }}</td></tr>
+    {% endfor %}
+  </table>
+
+  {% set out_rels = c.relationships %}
+  {% set in_rels = incoming.get(c.id, []) %}
+  {% if out_rels or in_rels %}
+  <div class="rel-block mt">
+    <b>关系</b>
+    <ul class="plain">
+      {% for r in out_rels %}
+      {% set t = by_id.get(r.target) %}
+      {% if t %}<li>{{ c.name }} → {{ t.name }}：<b>{{ r.relation }}</b>{% if r.note %}（{{ r.note }}）{% endif %}</li>{% endif %}
+      {% endfor %}
+      {% for r in in_rels %}
+      <li>{{ r.from_name }} → {{ c.name }}：<b>{{ r.relation }}</b>{% if r.note %}（{{ r.note }}）{% endif %}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if c.drift_alert %}
+  <div class="alert mt">⚠️ 漂移提醒：{{ c.drift_alert }}</div>
+  {% endif %}
+
+  {% if c.state_history %}
+  <p class="muted mt">状态变更：{% for h in c.state_history[-3:] %}{{ h.at }} {{ h.note }}{{ '；' if not loop.last }}{% endfor %}</p>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% if edges %}
+<div class="card">
+  <h2>关系网总览</h2>
+  <ul class="plain">
+    {% for e in edges %}
+    <li>{{ e.from_name }} → {{ e.to_name }}：<b>{{ e.relation }}</b>{% if e.note %}（{{ e.note }}）{% endif %}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% endblock %}

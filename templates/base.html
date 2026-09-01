@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}AI 小说写作系统{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="sidebar">
+    <div class="logo">📖 AI 小说写作系统</div>
+    <nav>
+      <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' }}">总览 Dashboard</a>
+
+      <div class="nav-section">写作</div>
+      <a href="{{ url_for('setup') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('setup') }}">🪄 新书向导</a>
+      <a href="{{ url_for('chapter') }}" class="{{ 'active' if request.endpoint == 'chapter' }}">✍️ 写作工作台</a>
+      <a href="{{ url_for('review') }}" class="{{ 'active' if request.endpoint == 'review' }}">审校循环</a>
+
+      <div class="nav-section">记忆与设定</div>
+      <a href="{{ url_for('characters') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('character') }}">角色列表</a>
+      <a href="{{ url_for('outline') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('outline') }}">章节大纲</a>
+      <a href="{{ url_for('memory') }}" class="{{ 'active' if request.endpoint == 'memory' }}">分层记忆</a>
+      <a href="{{ url_for('bible') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('bible') }}">世界观设定库</a>
+      <a href="{{ url_for('foreshadow') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('foreshadow') }}">伏笔追踪</a>
+      <a href="{{ url_for('style') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('style') }}">文风控制</a>
+
+      <div class="nav-section">系统</div>
+      <a href="{{ url_for('settings_models') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('settings') }}">⚙️ 模型配置</a>
+    </nav>
+    <div class="sidebar-footer">本地原型 · JSON 落盘存储</div>
+  </div>
+  <div class="content">
+    {% block content %}{% endblock %}
+  </div>
+</body>
+</html>

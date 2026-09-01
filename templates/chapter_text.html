@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}第{{ no }}章 {{ title }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>第 {{ no }} 章《{{ title }}》</h1>
+  <p class="subtitle">
+    {{ vol }} · <span class="badge {{ 'green' if entry.status == 'adopted' else '' }}">{{ status_label }}</span>
+    · 约 {{ entry.word_count }} 字
+    {% if entry.adopted_at %}· 采纳于 {{ entry.adopted_at }}{% endif %}
+  </p>
+  <p class="mt">
+    {% if prev_cid %}<a class="btn-inline" href="{{ url_for('chapter_text', cid=prev_cid) }}">← 上一章</a>{% endif %}
+    <a class="btn-inline" href="{{ url_for('chapter') }}">返回工作台</a>
+    {% if next_cid %}<a class="btn-inline" href="{{ url_for('chapter_text', cid=next_cid) }}">下一章 →</a>{% endif %}
+  </p>
+</div>
+
+<div class="card">
+  {% for p in paragraphs %}
+  <p style="line-height:2; margin:0 0 14px; text-indent:2em">{{ p }}</p>
+  {% endfor %}
+</div>
+
+{% if review %}
+<div class="card">
+  <h2>审校结果
+    <span class="badge {{ 'green' if review.pass else 'red' }}">{{ '通过' if review.pass else '未通过' }}</span>
+    <span class="badge">{{ review.score }} 分</span>
+  </h2>
+  {% if review.issues %}
+  <table>
+    <tr><th style="width:110px">检查项</th><th>问题描述</th></tr>
+    {% for it in review.issues %}
+    <tr><td><b>{{ it.type }}</b></td><td>{{ it.detail }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">没有发现问题。</p>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if history and history|length > 1 %}
+<div class="card">
+  <h2>审校历史（{{ history|length }} 轮）</h2>
+  <table>
+    <tr><th style="width:60px">轮次</th><th style="width:70px">结果</th><th style="width:60px">得分</th><th style="width:80px">字数</th><th>问题数</th></tr>
+    {% for h in history %}
+    <tr>
+      <td class="cell-center">第 {{ h.round }} 轮</td>
+      <td><span class="badge {{ 'green' if h.pass else 'red' }}">{{ '通过' if h.pass else '未通过' }}</span></td>
+      <td class="cell-center">{{ h.score }}</td>
+      <td class="cell-center">{{ h.word_count }}</td>
+      <td>{{ h.issues|length }} 个</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+{% endblock %}

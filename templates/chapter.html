@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% block title %}写作工作台{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>写作工作台</h1>
+  <p class="subtitle">概要 → LLM 细纲方案 → 确认 → 逐章「生成 → 审校 → 重写」→ 草稿 → 采纳（回写记忆 / 角色 / 伏笔 / 大纲）</p>
+  <p class="mt">
+    {% if llm_on %}<span class="badge green">LLM 已接入</span>
+    {% else %}<span class="badge red">未配置生成模型</span>{% endif %}
+    {% if wizard_done %}<span class="badge">作品档案已建</span>
+    {% else %}<span class="badge yellow">未完成新书向导</span>{% endif %}
+  </p>
+</div>
+
+{% if err %}<div class="alert">❌ {{ err }}</div>{% endif %}
+{% if msg %}<div class="toast-ok">✅ {{ msg }}</div>{% endif %}
+
+{% if not wizard_done %}
+<div class="card setup-banner">
+  <div>
+    <h2>还没有作品档案</h2>
+    <p class="muted">先完成新书向导，系统才能带着作品背景与文风规范写作。</p>
+  </div>
+  <a class="btn" href="{{ url_for('setup') }}">去建档</a>
+</div>
+{% endif %}
+
+{% if task %}
+<div class="card" id="task-card">
+  <h2>后台任务
+    <span class="badge {{ 'yellow' if task.status == 'running' else ('green' if task.status == 'done' else 'red') }}">
+      {{ {'running': '运行中', 'done': '已完成', 'error': '有失败'}.get(task.status, task.status) }}
+    </span>
+  </h2>
+  <p class="kv"><b>类型</b>{{ '采纳回写' if task.kind == 'adopt' else '正文生成' }}
+    <b style="margin-left:16px">进度</b><span id="task-progress-text">{{ task.done }} / {{ task.total }}</span>
+    {% if task.current %}<b style="margin-left:16px">当前</b><span id="task-current">{{ task.current }}</span>{% endif %}
+  </p>
+  <div class="progress-bar"><div id="task-progress-bar" style="width: {{ (task.done / task.total * 100) if task.total else 0 }}%"></div></div>
+  <div class="chat-log mt" id="task-logs" style="max-height:200px">
+    {% for line in task.logs %}<p class="muted" style="margin:2px 0">{{ line }}</p>{% endfor %}
+  </div>
+  {% if task.status == 'running' %}
+  <p class="muted mt">任务运行中，页面会自动刷新进度……</p>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if pending %}
+<div class="card" id="plan">
+  <h2>待确认细纲方案 <span class="badge yellow">核对后可改，确认即开写</span></h2>
+  <p class="kv"><b>内容构想</b>{{ pending.brief }}</p>
+  <p class="kv"><b>归入</b>{{ pending_vol_label }}　<b>起始</b>第 {{ pending_start_no }} 章　<b>每章最少</b>{{ pending.min_words }} 字</p>
+  <form method="post" action="{{ url_for('chapter_confirm', bid=pending.id) }}">
+    <table class="mt">
+      <tr><th style="width:56px">章号</th><th style="width:180px">标题</th><th>细纲</th></tr>
+      {% for item in pending.plan %}
+      <tr>
+        <td class="cell-center">第 {{ pending_start_no + loop.index0 }} 章</td>
+        <td><input type="text" name="plan_title" value="{{ item.title }}" required></td>
+        <td><textarea name="plan_summary" rows="2" required>{{ item.summary }}</textarea></td>
+      </tr>
+      {% endfor %}
+    </table>
+    <div class="action-bar mt">
+      <button type="submit" class="btn">✅ 确认细纲，开始生成 {{ pending.plan|length }} 章</button>
+      <button type="submit" class="btn secondary" formnovalidate
+              formaction="{{ url_for('chapter_discard', bid=pending.id) }}"
+              onclick="return confirm('放弃这份细纲方案？');">放弃方案</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>规划新一批章节</h2>
+  <form method="post" action="{{ url_for('chapter_plan') }}">
+    <div class="slot-fields">
+      <div class="field-row">
+        <label>本批内容构想</label>
+        <textarea name="brief" rows="3" required
+                  placeholder="用几句话描述接下来这批章节要讲什么，例如：主角入职新公司，发现上司竟是当年害他家破人亡的仇人之子……"></textarea>
+      </div>
+      <div class="field-row">
+        <label>章数（≤{{ max_batch }}）</label>
+        <input type="number" name="count" value="5" min="1" max="{{ max_batch }}">
+      </div>
+      <div class="field-row">
+        <label>每章最少字数</label>
+        <input type="number" name="min_words" value="1500" min="200" step="100">
+      </div>
+      <div class="field-row">
+        <label>归入卷</label>
+        <select name="vol_sel">
+          {% for v in volumes %}
+          <option value="{{ v.id }}" {{ 'selected' if loop.last }}>{{ v.title }}</option>
+          {% endfor %}
+          <option value="__new__" {{ 'selected' if not volumes }}>＋ 新建一卷</option>
+        </select>
+      </div>
+      <div class="field-row">
+        <label>新卷标题</label>
+        <input type="text" name="new_vol_title" placeholder="选「新建一卷」时生效，留空自动命名">
+      </div>
+    </div>
+    <div class="action-bar mt">
+      <button type="submit" class="btn" {{ 'disabled' if not llm_on }}>🧠 生成细纲方案</button>
+      {% if not llm_on %}<span class="inline-status err">请先到「模型配置」页填写生成模型</span>{% endif %}
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>章节列表 <span class="badge gray">{{ rows|length }} 章</span></h2>
+  {% if not rows %}
+  <p class="muted">大纲里还没有章节。先在上方规划一批，或到「章节大纲」页手动添加。</p>
+  {% else %}
+  <form method="post" id="chapter-form">
+    <table>
+      <tr>
+        <th style="width:36px"><input type="checkbox" id="check-all" title="全选可操作章节"></th><th style="width:48px">章号</th><th style="width:90px">卷</th>
+        <th>章节</th><th style="width:80px">状态</th><th style="width:70px">字数</th>
+        <th style="width:80px">审校</th><th style="width:60px">正文</th>
+      </tr>
+      {% for r in rows %}
+      <tr>
+        <td class="cell-center">
+          {% if r.regen_ok or r.adopt_ok %}
+          <input type="checkbox" name="chapter_ids" value="{{ r.cid }}">
+          {% endif %}
+        </td>
+        <td class="cell-center">{{ r.no }}</td>
+        <td class="muted">{{ r.vol }}</td>
+        <td>
+          <b>{{ r.title }}</b>
+          {% if r.summary %}<p class="muted" style="margin:2px 0">{{ r.summary }}</p>{% endif %}
+          {% if r.error %}<p class="inline-status err" style="margin:2px 0">{{ r.error }}</p>{% endif %}
+        </td>
+        <td>
+          {% set color = {'planned': 'gray', 'generating': 'yellow', 'reviewing': 'yellow',
+                          'draft': '', 'failed': 'red', 'adopted': 'green'}.get(r.e_status, 'gray') %}
+          <span class="badge {{ color }}">{{ r.status_label }}</span>
+        </td>
+        <td class="cell-center">{{ r.word_count or '—' }}</td>
+        <td>
+          {% if r.review %}
+          <span class="badge {{ 'green' if r.review.pass else 'red' }}">{{ r.review.score }} 分</span>
+          <span class="muted">{{ r.review.issues|length }} 问题</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td class="cell-center">
+          {% if r.read_ok %}<a class="btn-inline" href="{{ url_for('chapter_text', cid=r.cid) }}">阅读</a>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    <div class="field-row mt">
+      <label>重新生成附加要求（可选）</label>
+      <input type="text" name="note" placeholder="例如：加强冲突，减少内心独白">
+    </div>
+    <div class="action-bar mt">
+      <button type="submit" class="btn secondary" formaction="{{ url_for('chapter_regenerate') }}">♻️ 重新生成所选</button>
+      <button type="submit" class="btn" formaction="{{ url_for('chapter_adopt') }}"
+              onclick="return confirm('采纳后正文将写入记忆并更新角色状态 / 伏笔 / 大纲，不可撤销。继续？');">📥 采纳所选草稿</button>
+      <span class="inline-status">勾选「排队 / 失败 / 草稿」可重新生成；勾选「草稿」可采纳</span>
+    </div>
+  </form>
+  {% endif %}
+</div>
+
+{% if rows %}
+<script>
+// 表头全选：只勾选可操作（可重新生成/可采纳）的章节
+(function () {
+  var all = document.getElementById('check-all');
+  if (!all) return;
+  all.addEventListener('change', function () {
+    document.querySelectorAll('input.ch-check, input[name="chapter_ids"]').forEach(function (b) {
+      b.checked = all.checked;
+    });
+  });
+})();
+</script>
+{% endif %}
+
+{% if task and task.status == 'running' %}
+<script>
+(function () {
+  var tid = "{{ task.id }}";
+  var timer = setInterval(function () {
+    fetch("{{ url_for('chapter_task', tid='TID') }}".replace("TID", tid))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { clearInterval(timer); return; }
+        var t = d.task;
+        document.getElementById("task-progress-text").textContent = t.done + " / " + t.total;
+        document.getElementById("task-progress-bar").style.width = (t.total ? t.done / t.total * 100 : 0) + "%";
+        var cur = document.getElementById("task-current");
+        if (cur) cur.textContent = t.current || "";
+        var logs = document.getElementById("task-logs");
+        logs.innerHTML = t.logs.map(function (l) {
+          var p = document.createElement("p");
+          p.className = "muted"; p.style.margin = "2px 0"; p.textContent = l;
+          return p.outerHTML;
+        }).join("");
+        logs.scrollTop = logs.scrollHeight;
+        if (t.status !== "running") {
+          clearInterval(timer);
+          window.location.reload();
+        }
+      })
+      .catch(function () {});
+  }, 2000);
+  var logs = document.getElementById("task-logs");
+  if (logs) logs.scrollTop = logs.scrollHeight;
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}章节大纲{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>章节大纲</h1>
+  <p class="subtitle">全书主线 → 卷 → 章节。章节由「写作工作台」创建，本页只负责结构展示与删除。</p>
+</div>
+
+{% if err %}<div class="alert">❌ {{ err }}</div>{% endif %}
+{% if msg %}<div class="toast-ok">✅ {{ msg }}</div>{% endif %}
+
+<div class="card">
+  <div class="vol-head">
+    <h2>全书主线</h2>
+    <details class="vol-edit">
+      <summary class="btn-inline">编辑主线</summary>
+      <form method="post" action="{{ url_for('outline_main') }}" class="edit-pop">
+        <textarea name="main" rows="3" placeholder="一句话讲清楚整本书的故事走向">{{ store.main }}</textarea>
+        <button class="btn" type="submit">保存主线</button>
+      </form>
+    </details>
+  </div>
+  {% if store.main %}<p class="kv">{{ store.main }}</p>
+  {% else %}<p class="muted">尚未设置全书主线。</p>{% endif %}
+</div>
+
+<div class="card">
+  <h2>新建卷</h2>
+  <form method="post" action="{{ url_for('outline_volume_add') }}" class="vol-add-form">
+    <input type="text" name="title" placeholder="卷标题，如：第一卷 · 初露锋芒" required>
+    <input type="text" name="summary" placeholder="卷简介（可选）">
+    <button class="btn" type="submit">＋ 创建卷</button>
+  </form>
+</div>
+
+{% if not store.volumes %}
+<div class="card"><p class="muted">还没有卷。先在上方创建第一卷；章节请在「写作工作台」创建，之后会自动归入对应卷。</p></div>
+{% endif %}
+
+{% for vol in store.volumes %}
+{% set pd = page_data[vol.id] %}
+<div class="card" id="vol-{{ vol.id }}">
+  <div class="vol-head">
+    <h2>{{ vol.title }} <span class="badge gray">{{ pd.total }} 章</span></h2>
+    <div class="vol-tools">
+      <details class="vol-edit">
+        <summary class="btn-inline">编辑卷</summary>
+        <form method="post" action="{{ url_for('outline_volume_edit', vid=vol.id) }}" class="edit-pop">
+          <input type="text" name="title" value="{{ vol.title }}" placeholder="卷标题" required>
+          <input type="text" name="summary" value="{{ vol.summary }}" placeholder="卷简介（可选）">
+          <button class="btn" type="submit">保存</button>
+        </form>
+      </details>
+      <form method="post" action="{{ url_for('outline_volume_delete', vid=vol.id) }}"
+            onsubmit="return confirm('删除卷「{{ vol.title }}」及其全部 {{ pd.total }} 章？此操作不可恢复。');">
+        <button class="btn-inline danger" type="submit">删除卷</button>
+      </form>
+    </div>
+  </div>
+  {% if vol.summary %}<p class="kv">{{ vol.summary }}</p>{% endif %}
+
+  {% if pd.total == 0 %}
+  <p class="muted mt">本卷还没有章节。章节在「写作工作台」创建。</p>
+  {% else %}
+  <table class="mt">
+    <tr>
+      <th style="width:56px">章</th>
+      <th style="width:200px">标题</th>
+      <th>细纲摘要</th>
+      <th style="width:80px">状态</th>
+      <th style="width:120px">创建时间</th>
+      <th style="width:64px">操作</th>
+    </tr>
+    {% for no, ch in pd.rows %}
+    <tr>
+      <td>{{ no }}</td>
+      <td>{{ ch.title }}</td>
+      <td class="muted">{{ ch.summary or "—" }}</td>
+      <td>
+        {% if ch.status == "已生成" %}<span class="badge green">已生成</span>
+        {% else %}<span class="badge gray">待生成</span>{% endif %}
+      </td>
+      <td class="muted">{{ ch.created_at }}</td>
+      <td>
+        <form method="post" action="{{ url_for('outline_chapter_delete', cid=ch.id) }}"
+              onsubmit="return confirm('删除第 {{ no }} 章「{{ ch.title }}」？');">
+          <button class="btn-inline danger" type="submit">删除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  {% if pd.pages > 1 %}
+  <div class="pager">
+    {% if pd.page > 1 %}<a class="btn-inline" href="{{ page_url(vol.id, pd.page - 1) }}">← 上一页</a>{% endif %}
+    <span class="muted">第 {{ pd.page }} / {{ pd.pages }} 页 · 共 {{ pd.total }} 章</span>
+    {% if pd.page < pd.pages %}<a class="btn-inline" href="{{ page_url(vol.id, pd.page + 1) }}">下一页 →</a>{% endif %}
+  </div>
+  {% endif %}
+  {% endif %}
+</div>
+{% endfor %}
+{% endblock %}

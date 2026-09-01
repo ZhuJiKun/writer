@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}{{ '手动添加角色' if is_new else '编辑 · ' + char.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ '＋ 手动添加角色' if is_new else '编辑角色 · ' + char.name }}</h1>
+  <p class="subtitle">档案、动态状态与关系都可以手动维护；状态变更会记入历史。</p>
+</div>
+
+<form method="post" action="{{ url_for('character_create') if is_new else url_for('character_save', cid=char.id) }}">
+  <div class="card">
+    <h2>静态档案</h2>
+    <div class="profile-grid">
+      <label>姓名</label><input type="text" name="name" value="{{ char.name }}" required>
+      <label>定位</label>
+      <select name="role_type">
+        {% for r in ['主角', '配角'] %}
+        <option value="{{ r }}" {{ 'selected' if char.role_type == r }}>{{ r }}</option>
+        {% endfor %}
+      </select>
+      <label>性别</label>
+      <select name="gender">
+        {% for g in ['男', '女', '其他'] %}
+        <option value="{{ g }}" {{ 'selected' if char.gender == g }}>{{ g }}</option>
+        {% endfor %}
+      </select>
+      <label>性格</label><textarea name="personality" rows="2">{{ char.personality }}</textarea>
+      <label>背景</label><textarea name="background" rows="3">{{ char.background }}</textarea>
+      <label>外貌</label><textarea name="appearance" rows="2">{{ char.appearance }}</textarea>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>动态状态</h2>
+    <div class="profile-grid">
+      {% for k in state_keys %}
+      <label>{{ k }}</label><input type="text" name="state__{{ k }}" value="{{ char.state.get(k, '') }}">
+      {% endfor %}
+    </div>
+    {% if char.state_history %}
+    <p class="muted mt">变更历史：{% for h in char.state_history %}{{ h.at }} {{ h.note }}{{ '；' if not loop.last }}{% endfor %}</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>关系</h2>
+    <p class="muted">TA 与其他角色的关系（对方卡片上会自动显示反向关系）。</p>
+    <div id="rel-rows" class="mt">
+      {% for r in char.relationships %}
+      <div class="rel-row">
+        <select name="rel_target">
+          <option value="">选择角色…</option>
+          {% for o in others %}
+          <option value="{{ o.id }}" {{ 'selected' if r.target == o.id }}>{{ o.name }}（{{ o.role_type }}）</option>
+          {% endfor %}
+        </select>
+        <input type="text" name="rel_relation" placeholder="关系，如 师徒" value="{{ r.relation }}">
+        <input type="text" name="rel_note" placeholder="备注（可空）" value="{{ r.note }}">
+        <button type="button" class="btn-inline" onclick="this.parentElement.remove()">删行</button>
+      </div>
+      {% endfor %}
+    </div>
+    <button type="button" class="btn-inline mt" onclick="addRelRow()">＋ 添加关系</button>
+  </div>
+
+  <div class="save-bar">
+    <button type="submit" class="btn">💾 保存</button>
+    <a class="btn secondary" href="{{ url_for('characters') }}">取消</a>
+  </div>
+</form>
+
+<script>
+const OTHERS = {{ others_brief | tojson }};
+function addRelRow() {
+  const row = document.createElement('div');
+  row.className = 'rel-row';
+  const opts = ['<option value="">选择角色…</option>']
+    .concat(OTHERS.map(o => `<option value="${o.id}">${o.name}（${o.role_type}）</option>`)).join('');
+  row.innerHTML = `<select name="rel_target">${opts}</select>
+    <input type="text" name="rel_relation" placeholder="关系，如 师徒">
+    <input type="text" name="rel_note" placeholder="备注（可空）">
+    <button type="button" class="btn-inline" onclick="this.parentElement.remove()">删行</button>`;
+  document.getElementById('rel-rows').appendChild(row);
+}
+</script>
+{% endblock %}

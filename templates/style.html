@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}文风控制{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>文风控制</h1>
+  <p class="subtitle">风格约束 + 标准样章，写作时作为 few-shot 注入 prompt，比抽象描述「文笔要好」有效得多</p>
+</div>
+
+{% if err %}<div class="alert">❌ {{ err }}</div>{% endif %}
+{% if msg %}<div class="toast-ok">✅ {{ msg }}</div>{% endif %}
+
+{% set labels = {"person": "人称", "pov": "视角（POV）", "tense": "时态", "paragraph": "段落习惯", "dialogue_ratio": "对话比例"} %}
+
+<div class="card">
+  <div class="vol-head">
+    <h2>风格约束</h2>
+    <div class="vol-tools">
+      <form method="post" action="{{ url_for('style_extract') }}">
+        <button class="btn-inline" type="submit" {% if not llm_on %}disabled{% endif %}>✨ 从文风规范提取</button>
+      </form>
+    </div>
+  </div>
+  <form method="post" action="{{ url_for('style_save') }}">
+    {% for k in keys %}
+    <div class="field-row mt">
+      <label>{{ labels[k] }}</label>
+      <input type="text" name="{{ k }}" value="{{ store.constraints[k] }}" placeholder="可点上方「从文风规范提取」自动填充">
+    </div>
+    {% endfor %}
+    <div class="mt"><button class="btn" type="submit">保存约束</button></div>
+  </form>
+  {% if style_prompt %}
+  <details class="mt">
+    <summary class="muted" style="cursor:pointer">查看作品档案中的完整文风规范（新书向导生成，去「新书向导」修改）</summary>
+    <div class="excerpt mt">{{ style_prompt }}</div>
+  </details>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="vol-head">
+    <h2>标准文风样章 <span class="badge gray">{{ store.samples|length }}</span></h2>
+    <div class="vol-tools">
+      <form method="post" action="{{ url_for('style_sample_generate') }}">
+        <button class="btn-inline" type="submit" {% if not llm_on %}disabled{% endif %}>✨ LLM 生成样章</button>
+      </form>
+      <details class="vol-edit">
+        <summary class="btn-inline">＋ 手动添加</summary>
+        <form method="post" action="{{ url_for('style_sample_add') }}" class="edit-pop">
+          <textarea name="content" rows="4" placeholder="贴一段最能代表本书文风的文字" required></textarea>
+          <button class="btn" type="submit">添加</button>
+        </form>
+      </details>
+    </div>
+  </div>
+  {% if not store.samples %}
+  <p class="muted">还没有样章。点「LLM 生成样章」依据文风规范自动写一段；也可以手动粘贴。</p>
+  {% endif %}
+  {% for s in store.samples %}
+  <div class="excerpt mt">
+    {{ s.content }}
+    <div class="vol-tools mt">
+      <span class="badge {{ 'green' if s.source == 'llm' else 'gray' }}">{{ 'LLM 生成' if s.source == 'llm' else '手动添加' }}</span>
+      <span class="muted">{{ s.created_at }}</span>
+      <form method="post" action="{{ url_for('style_sample_delete', sid=s.id) }}"
+            onsubmit="return confirm('删除这段样章？');">
+        <button class="btn-inline danger" type="submit">删除</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if not llm_on %}
+<div class="card"><p class="muted">未配置模型，LLM 功能不可用，请先到「模型配置」。</p></div>
+{% endif %}
+{% endblock %}

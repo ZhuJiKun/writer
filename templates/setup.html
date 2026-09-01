@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}新书向导 · 写作系统{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>🪄 新书向导</h1>
+  <p class="subtitle">首次写作前的初始化：通过对话确定作品定位、概要、故事背景与文风提示词，产出保存到 project.json。</p>
+  <p class="mt">
+    {% if llm_on %}<span class="badge green">LLM 已接入（正文生成配置）</span>
+    {% else %}<span class="badge red">未配置生成模型，请先到「模型配置」填写</span>{% endif %}
+    {% if project.wizard.done %}<span class="badge">✅ 已建档 {{ project.created_at }}</span>{% endif %}
+  </p>
+</div>
+
+<div class="wizard-layout">
+  <div class="card wizard-steps">
+    <h2>初始化步骤</h2>
+    <ul class="step-list" id="step-list">
+      {% for sid, sname in steps %}
+      <li data-step="{{ sid }}" class="{{ 'done' if project.wizard.done or cur_idx > loop.index0 else ('active' if cur_idx == loop.index0 else '') }}">
+        <span class="step-dot"></span>{{ sname }}
+      </li>
+      {% endfor %}
+      <li data-step="done" class="{{ 'done' if project.wizard.done }}">
+        <span class="step-dot"></span>完成建档
+      </li>
+    </ul>
+    <form method="post" action="{{ url_for('setup_reset') }}" class="mt"
+          onsubmit="return confirm('确定清空当前向导进度并重新开始？');">
+      <button type="submit" class="btn-inline">↺ 重新开始</button>
+    </form>
+  </div>
+
+  <div>
+    <div class="card chat-card">
+      <h2>对话</h2>
+      <div class="chat-log" id="chat-log">
+        {% for m in project.wizard.history %}
+        <div class="bubble-row {{ 'user' if m.role == 'user' else 'assistant' }}">
+          <div class="bubble">{{ m.content | nl2br }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% if project.wizard.done %}
+      <div class="chat-done muted">✅ 已建档。可继续在下方对话中让 LLM 修改档案，改完记得点「保存建档」。</div>
+      {% endif %}
+      <div class="chat-input-row">
+        <input type="text" id="chat-input" autocomplete="off"
+               placeholder="{{ '想改哪里？直接说，比如「把文风改成冷峻克制」…' if project.wizard.done else '输入你的回答，回车发送…' }}">
+        <button class="btn" id="chat-send" onclick="sendMsg()">发送</button>
+      </div>
+      <div class="muted" id="chat-status" style="margin-top:8px"></div>
+    </div>
+
+    <form method="post" action="{{ url_for('setup_save') }}">
+      <div class="card">
+        <h2>作品档案（可编辑）</h2>
+        <div class="profile-grid">
+          <label>书名</label><input type="text" name="title" id="f_title" value="{{ project.title }}" placeholder="可先留空，后再定">
+          <label>题材</label><input type="text" name="genre" id="f_genre" value="{{ project.genre }}">
+          <label>目标读者</label><input type="text" name="audience" id="f_audience" value="{{ project.audience }}">
+          <label>预计篇幅</label><input type="text" name="length" id="f_length" value="{{ project.length }}" placeholder="如 120 章 / 80万字">
+          <label>一句话梗概</label><input type="text" name="logline" id="f_logline" value="{{ project.logline }}">
+          <label>故事概要</label><textarea name="synopsis" id="f_synopsis" rows="3">{{ project.synopsis }}</textarea>
+          <label>时代 / 世界</label><textarea name="era" id="f_era" rows="2">{{ project.background.era }}</textarea>
+          <label>规则 / 力量体系</label><textarea name="rules" id="f_rules" rows="2">{{ project.background.rules }}</textarea>
+          <label>舞台 / 势力</label><textarea name="stage" id="f_stage" rows="2">{{ project.background.stage }}</textarea>
+          <label>文风提示词</label><textarea name="style_prompt" id="f_style_prompt" rows="4">{{ project.style_prompt }}</textarea>
+        </div>
+      </div>
+      <div class="save-bar">
+        <button type="submit" class="btn">💾 保存建档</button>
+        <span class="muted">保存后文风提示词将在正文生成时注入</span>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+const chatLog = document.getElementById('chat-log');
+const chatInput = document.getElementById('chat-input');
+const chatStatus = document.getElementById('chat-status');
+
+function addBubble(role, text) {
+  const row = document.createElement('div');
+  row.className = 'bubble-row ' + role;
+  const b = document.createElement('div');
+  b.className = 'bubble';
+  b.textContent = text;
+  row.appendChild(b);
+  chatLog.appendChild(row);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+function fillCard(p) {
+  const bg = p.background || {};
+  const map = {f_title: p.title, f_genre: p.genre, f_audience: p.audience, f_length: p.length,
+               f_logline: p.logline, f_synopsis: p.synopsis, f_era: bg.era, f_rules: bg.rules,
+               f_stage: bg.stage, f_style_prompt: p.style_prompt};
+  for (const [id, v] of Object.entries(map)) {
+    const el = document.getElementById(id);
+    if (el && v !== undefined && v !== null && v !== '') el.value = v;
+  }
+}
+
+function updateSteps(step, done) {
+  const ids = ['profile', 'premise', 'background', 'style', 'done'];
+  const cur = ids.indexOf(step);
+  document.querySelectorAll('#step-list li').forEach(li => {
+    const i = ids.indexOf(li.dataset.step);
+    li.className = done || i < cur ? 'done' : (i === cur ? 'active' : '');
+  });
+}
+
+async function sendMsg() {
+  const msg = chatInput.value.trim();
+  if (!msg) return;
+  chatInput.value = '';
+  addBubble('user', msg);
+  chatStatus.textContent = '对方思考中…';
+  try {
+    const resp = await fetch("{{ url_for('setup_chat') }}", {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: new URLSearchParams({message: msg}),
+    });
+    const r = await resp.json();
+    if (!r.ok) { addBubble('assistant', '❌ ' + (r.detail || '请求失败')); chatStatus.textContent = ''; return; }
+    addBubble('assistant', r.reply);
+    fillCard(r.project);
+    updateSteps(r.step, r.done);
+    chatStatus.textContent = '';
+    if (r.done) chatStatus.textContent = '✅ 信息收集完毕，请核对下方配置后保存建档';
+  } catch (e) {
+    chatStatus.textContent = '❌ 请求失败：' + e;
+  }
+}
+
+chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendMsg(); });
+chatLog.scrollTop = chatLog.scrollHeight;
+</script>
+{% endblock %}

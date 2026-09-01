@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}伏笔追踪{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>伏笔追踪</h1>
+  <p class="subtitle">记录每个伏笔的埋设章节、计划回收位置与状态，是一致性检查的数据基础</p>
+</div>
+
+{% if err %}<div class="alert">❌ {{ err }}</div>{% endif %}
+{% if msg %}<div class="toast-ok">✅ {{ msg }}</div>{% endif %}
+
+<div class="action-bar">
+  <form method="post" action="{{ url_for('foreshadow_brainstorm') }}">
+    <button class="btn" type="submit" {% if not (llm_on and wizard_done) %}disabled{% endif %}>✨ LLM 头脑风暴伏笔</button>
+  </form>
+  <details class="vol-edit">
+    <summary class="btn secondary btn-like">＋ 手动添加</summary>
+    <form method="post" action="{{ url_for('foreshadow_add') }}" class="edit-pop">
+      <textarea name="content" rows="2" placeholder="伏笔内容，如：师父可能未死（遗书笔迹）" required></textarea>
+      <input type="text" name="planted" placeholder="埋设于，如：第3章">
+      <input type="text" name="plan_recycle" placeholder="计划回收，如：第45章 / 第三卷">
+      <select name="status">
+        {% for s in statuses %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+      </select>
+      <button class="btn" type="submit">添加</button>
+    </form>
+  </details>
+  <span class="muted">当前进度：已生成 {{ done_ch }} 章，超过计划回收点的伏笔会标红</span>
+  {% if not llm_on %}<span class="muted">未配置模型，LLM 生成不可用，请先到「模型配置」</span>
+  {% elif not wizard_done %}<span class="muted">请先完成「新书向导」建档，再使用 LLM 生成</span>{% endif %}
+</div>
+
+<div class="card">
+  {% if not items %}
+  <p class="muted">还没有伏笔。点击「LLM 头脑风暴伏笔」，让 LLM 依据主线与各卷细纲设计几条；也可以手动添加。</p>
+  {% else %}
+  <table>
+    <tr>
+      <th style="width:70px">编号</th><th>伏笔内容</th>
+      <th style="width:100px">埋设于</th><th style="width:130px">计划回收</th>
+      <th style="width:110px">状态</th><th style="width:96px">操作</th>
+    </tr>
+    {% for f in items %}
+    <tr>
+      <td><b>{{ f.id }}</b></td>
+      <td>{{ f.content }}</td>
+      <td>{{ f.planted or "—" }}</td>
+      <td>{{ f.plan_recycle or "—" }}</td>
+      <td>
+        {% if f.id in due_ids %}<span class="badge red">已到回收点</span>
+        {% elif f.status == '已回收' %}<span class="badge green">已回收</span>
+        {% elif f.status == '长线' %}<span class="badge gray">长线</span>
+        {% else %}<span class="badge yellow">待回收</span>{% endif %}
+      </td>
+      <td>
+        <div class="vol-tools">
+          <details class="vol-edit">
+            <summary class="btn-inline">编辑</summary>
+            <form method="post" action="{{ url_for('foreshadow_save', fid=f.id) }}" class="edit-pop">
+              <textarea name="content" rows="2" required>{{ f.content }}</textarea>
+              <input type="text" name="planted" value="{{ f.planted }}" placeholder="埋设于">
+              <input type="text" name="plan_recycle" value="{{ f.plan_recycle }}" placeholder="计划回收">
+              <select name="status">
+                {% for s in statuses %}<option value="{{ s }}" {% if f.status == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+              </select>
+              <button class="btn" type="submit">保存</button>
+            </form>
+          </details>
+          <form method="post" action="{{ url_for('foreshadow_delete', fid=f.id) }}"
+                onsubmit="return confirm('删除伏笔 {{ f.id }}？');">
+            <button class="btn-inline danger" type="submit">删除</button>
+          </form>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted mt">红色「已到回收点」表示计划回收章节已小于等于当前已生成进度，写作时会作为提醒注入上下文。</p>
+  {% endif %}
+</div>
+{% endblock %}

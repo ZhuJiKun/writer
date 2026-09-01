@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}总览 · 写作系统{% endblock %}
+{% block content %}
+{% if not wizard_done %}
+<div class="card setup-banner">
+  <div>
+    <h2>🪄 还没有作品档案</h2>
+    <p class="muted">首次写作前，先通过新书向导确定题材、故事背景与文风（对话式，约 2 分钟）。</p>
+  </div>
+  <a class="btn" href="{{ url_for('setup') }}">开始新书向导</a>
+</div>
+{% endif %}
+<h1>{{ book.title }}</h1>
+<p class="subtitle">{{ book.genre }} · 共 {{ book.volumes }} 卷</p>
+
+<div class="grid-3">
+  <div class="stat"><div class="num">{{ book.current_chapter }}</div><div class="label">已生成章节</div></div>
+  <div class="stat"><div class="num">{{ book.total_planned }}</div><div class="label">大纲章节数</div></div>
+  <div class="stat"><div class="num">{{ alerts|length }}</div><div class="label">待处理提醒</div></div>
+</div>
+<div class="card mt">
+  <h2>整体进度</h2>
+  {% set pct = (book.current_chapter / book.total_planned * 100) if book.total_planned else 0 %}
+  <div class="progress-bar"><div style="width: {{ pct | round(1) }}%"></div></div>
+  <p class="muted mt">{{ pct | round(1) }}% —— 已生成 {{ book.current_chapter }} / {{ book.total_planned }} 章</p>
+</div>
+
+<div class="card">
+  <h2>⚠️ 系统提醒（来自伏笔追踪 / 状态更新器）</h2>
+  {% for a in alerts %}
+  <div class="alert">{{ a }}</div>
+  {% else %}
+  <p class="muted">暂无提醒。</p>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <h2>各卷进度</h2>
+  {% if not arcs %}
+  <p class="muted">还没有卷，去「章节大纲」创建。</p>
+  {% else %}
+  <table>
+    <tr><th>卷</th><th>概要</th><th>状态</th></tr>
+    {% for arc in arcs %}
+    <tr>
+      <td>{{ arc.name }}</td>
+      <td>{{ arc.summary }}</td>
+      <td>
+        {% if arc.status == '已完成' %}<span class="badge green">已完成</span>
+        {% elif arc.status == '进行中' %}<span class="badge">进行中</span>
+        {% else %}<span class="badge gray">未开始</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>最近章节摘要</h2>
+  {% if not summaries %}
+  <p class="muted">还没有合并摘要，去「分层记忆」从大纲同步并压缩生成。</p>
+  {% else %}
+  <ul class="plain">
+    {% for s in summaries %}
+    <li><b>{{ s.range }}</b> —— {{ s.summary }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endblock %}

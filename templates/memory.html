@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% block title %}分层记忆{% endblock %}
+
+{% macro pager(param, page, pages, total, keep_name, keep_value, unit) %}
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn-inline" href="{{ url_for('memory') }}?{{ param }}={{ page - 1 }}&{{ keep_name }}={{ keep_value }}">← 上一页</a>{% endif %}
+  {% set ns = namespace(prev=0) %}
+  {% for p in range(1, pages + 1) %}
+    {% if p == 1 or p == pages or (p >= page - 2 and p <= page + 2) %}
+      {% if ns.prev and p > ns.prev + 1 %}<span class="muted">…</span>{% endif %}
+      {% if p == page %}<span class="pg cur">{{ p }}</span>
+      {% else %}<a class="pg" href="{{ url_for('memory') }}?{{ param }}={{ p }}&{{ keep_name }}={{ keep_value }}">{{ p }}</a>{% endif %}
+      {% set ns.prev = p %}
+    {% endif %}
+  {% endfor %}
+  {% if page < pages %}<a class="btn-inline" href="{{ url_for('memory') }}?{{ param }}={{ page + 1 }}&{{ keep_name }}={{ keep_value }}">下一页 →</a>{% endif %}
+  <span class="muted">共 {{ total }} {{ unit }}</span>
+  <form class="pager-jump" method="get" action="{{ url_for('memory') }}">
+    <input type="hidden" name="{{ keep_name }}" value="{{ keep_value }}">
+    跳至 <input type="number" name="{{ param }}" min="1" max="{{ pages }}" value="{{ page }}"> 页
+    <button class="btn-inline" type="submit">确定</button>
+  </form>
+</div>
+{% endif %}
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <h1>分层记忆</h1>
+  <p class="subtitle">近章保留原文，更早章节有损压缩为摘要 —— 上下文组装器按需取用，控制 token 成本</p>
+</div>
+
+{% if err %}<div class="alert">❌ {{ err }}</div>{% endif %}
+{% if msg %}<div class="toast-ok">✅ {{ msg }}</div>{% endif %}
+
+<div class="action-bar">
+  <form method="post" action="{{ url_for('memory_sync') }}" style="display:inline">
+    <button class="btn secondary" type="submit">🔄 从大纲同步章节摘要</button>
+  </form>
+  {% if c_total %}
+  <button class="btn" type="submit" form="compress-form" {% if not llm_on %}disabled{% endif %}>✨ LLM 压缩所选章节</button>
+  <button class="btn secondary" type="button" id="pick-uncovered">☑ 选中未压缩</button>
+  <button class="btn secondary" type="button" id="clear-sel">✕ 清空选择</button>
+  <span class="muted" id="cost-hint"></span>
+  {% endif %}
+  {% if not llm_on %}<span class="muted">未配置模型，LLM 压缩不可用，请先到「模型配置」</span>{% endif %}
+</div>
+
+<div class="card">
+  <h2>近章原文（直接注入 prompt）</h2>
+  {% if recent_texts %}
+  {% for t in recent_texts %}
+  <p class="kv"><b>第 {{ t.no }} 章《{{ t.title }}》</b>
+    <a href="{{ url_for('chapter_text', cid=t.cid) }}" style="font-size:12px">阅读全文 →</a></p>
+  <div class="excerpt">{{ t.excerpt }}……</div>
+  {% endfor %}
+  <p class="muted mt">生成新章节时，最近一章正文的结尾部分会自动注入上下文，保证行文连贯。</p>
+  {% else %}
+  <p class="muted">还没有章节正文。到「写作工作台」生成后，最近 1~2 章正文会自动出现在这里。</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>逐章摘要层 <span class="badge gray">{{ c_total }}</span></h2>
+  {% if not c_total %}
+  <p class="muted">还没有章节摘要。点击上方「从大纲同步章节摘要」，把各章细纲同步进来（章节正文生成后会升级为正文摘要）。</p>
+  {% else %}
+  <p class="muted">勾选要压缩的章节（可跨段、跨页多选，翻页不会丢失选择），再点「LLM 压缩所选章节」；每 ≤10 章消耗一次 LLM 调用，与已有合并段重叠的范围会自动替换旧段。</p>
+  <form method="post" action="{{ url_for('memory_compress') }}" id="compress-form">
+  <table>
+    <tr>
+      <th style="width:36px"><input type="checkbox" id="check-all" title="全选本页"></th>
+      <th style="width:56px">章</th>
+      <th style="width:170px">标题</th>
+      <th>摘要</th>
+      <th class="cell-center" style="width:64px">来源</th>
+      <th class="cell-center" style="width:76px">压缩</th>
+    </tr>
+    {% for c in chapters %}
+    <tr>
+      <td><input type="checkbox" class="ch-check" name="chapter_ids" value="{{ c.chapter_id }}"></td>
+      <td>{{ c.no }}</td>
+      <td>{{ c.title }}<div class="muted">{{ c.vol }}</div></td>
+      <td>{{ c.summary }}</td>
+      <td class="cell-center">
+        {% if c.source == '正文' %}<span class="badge green">正文</span>
+        {% else %}<span class="badge gray">细纲</span>{% endif %}
+      </td>
+      <td class="cell-center">
+        {% if c.no in covered %}<span class="badge">✓ 已压缩</span>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  </form>
+  {{ pager('cp', cp, c_pages, c_total, 'mp', mp, '章') }}
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>合并摘要层 <span class="badge gray">{{ m_total }}</span></h2>
+  {% if not m_total %}
+  <p class="muted">还没有合并摘要。先在上方勾选章节，再点「LLM 压缩所选章节」。</p>
+  {% else %}
+  <table>
+    <tr><th style="width:190px">章节范围</th><th>压缩摘要</th><th style="width:64px">操作</th></tr>
+    {% for m in merged %}
+    <tr>
+      <td><b>{{ m.range }}</b><div class="muted">{{ m.created_at }}</div></td>
+      <td>{{ m.summary }}</td>
+      <td>
+        <form method="post" action="{{ url_for('memory_merged_delete', mid=m.id) }}"
+              onsubmit="return confirm('删除这段合并摘要？');">
+          <button class="btn-inline danger" type="submit">删除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {{ pager('mp', mp, m_pages, m_total, 'cp', cp, '段') }}
+  <p class="muted mt">压缩策略：逐章摘要 → 跨章合并 → 事实索引，层数越深保留越少。压缩按选区追加；与已有段重叠的范围会先删除旧段再写入新段。</p>
+  {% endif %}
+</div>
+
+{% if c_total %}
+<script>
+var META = {{ chapters_meta|tojson }};
+var COVERED = {{ covered_list|tojson }};
+(function () {
+  var KEY = 'memory_compress_sel';
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('.ch-check'));
+  var all = document.getElementById('check-all');
+  var hint = document.getElementById('cost-hint');
+  var form = document.getElementById('compress-form');
+  var byId = {};
+  META.forEach(function (m) { byId[m.id] = m; });
+
+  function load() {
+    try { return JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { return []; }
+  }
+  function save(ids) { localStorage.setItem(KEY, JSON.stringify(ids)); }
+
+  // 清理已不存在的章节 id，并恢复本页可见行的勾选状态
+  save(load().filter(function (id) { return !!byId[id]; }));
+  var sel = load();
+  boxes.forEach(function (b) { b.checked = sel.indexOf(b.value) !== -1; });
+
+  // 与服务端一致：连续且同卷为一段，段内每 10 章一次调用
+  function estimate(ids) {
+    var items = ids.map(function (id) { return byId[id]; }).filter(Boolean)
+      .sort(function (x, y) { return x.no - y.no; });
+    var calls = 0, i = 0;
+    while (i < items.length) {
+      var j = i, size = 0;
+      while (j < items.length && size < 10 &&
+             (j === i || (items[j].no === items[j - 1].no + 1 && items[j].vol === items[j - 1].vol))) {
+        j++; size++;
+      }
+      calls++; i = j;
+    }
+    return calls;
+  }
+
+  function refresh() {
+    var ids = load();
+    hint.textContent = ids.length ? '已选 ' + ids.length + ' 章 → 约 ' + estimate(ids) + ' 次 LLM 调用' : '';
+    if (all) all.checked = boxes.length > 0 && boxes.every(function (b) { return b.checked; });
+  }
+
+  boxes.forEach(function (b) {
+    b.addEventListener('change', function () {
+      var ids = load();
+      var i = ids.indexOf(b.value);
+      if (b.checked && i === -1) ids.push(b.value);
+      if (!b.checked && i !== -1) ids.splice(i, 1);
+      save(ids); refresh();
+    });
+  });
+
+  if (all) all.addEventListener('change', function () {
+    var ids = load();
+    boxes.forEach(function (b) {
+      b.checked = all.checked;
+      var i = ids.indexOf(b.value);
+      if (all.checked && i === -1) ids.push(b.value);
+      if (!all.checked && i !== -1) ids.splice(i, 1);
+    });
+    save(ids); refresh();
+  });
+
+  var pick = document.getElementById('pick-uncovered');
+  if (pick) pick.addEventListener('click', function () {
+    var ids = META.filter(function (m) { return COVERED.indexOf(m.no) === -1; })
+                  .map(function (m) { return m.id; });
+    save(ids);
+    boxes.forEach(function (b) { b.checked = ids.indexOf(b.value) !== -1; });
+    refresh();
+  });
+
+  var clearBtn = document.getElementById('clear-sel');
+  if (clearBtn) clearBtn.addEventListener('click', function () {
+    save([]);
+    boxes.forEach(function (b) { b.checked = false; });
+    refresh();
+  });
+
+  if (form) form.addEventListener('submit', function (e) {
+    var ids = load();
+    if (!ids.length) { e.preventDefault(); alert('请先勾选要压缩的章节摘要'); return; }
+    // 跨页选择统一注入为隐藏字段；禁用可见复选框避免重复提交
+    ids.forEach(function (id) {
+      var h = document.createElement('input');
+      h.type = 'hidden'; h.name = 'chapter_ids'; h.value = id;
+      form.appendChild(h);
+    });
+    boxes.forEach(function (b) { b.disabled = true; });
+    localStorage.removeItem(KEY);
+  });
+
+  refresh();
+})();
+</script>
+{% endif %}
+{% endblock %}

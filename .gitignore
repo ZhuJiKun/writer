@@ -1,0 +1,18 @@
+# 用户配置与个人数据（不落库）
+config.json
+project.json
+characters.json
+characters_bck/
+outline.json
+chapters.json
+bible.json
+foreshadow.json
+style.json
+memory.json
+*.corrupt-*
+
+# 运行时与系统杂项
+__pycache__/
+*.pyc
+.DS_Store
+nohup.out
