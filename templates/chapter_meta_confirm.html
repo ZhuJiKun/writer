@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}标题/概要建议 · 第{{ no }}章{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>第 {{ no }} 章 · LLM 标题/概要建议</h1>
+  <p class="subtitle">{% if requirement %}你的要求：{{ requirement }}{% else %}LLM 根据章节正文生成{% endif %}</p>
+  <p class="mt">
+    <a class="btn-inline" href="{{ url_for('chapter') }}">← 返回工作台（不采用）</a>
+  </p>
+</div>
+
+<div class="card">
+  <h2>确认替换 <span class="badge yellow">采用后覆盖旧的标题与概要</span></h2>
+  <table class="mt">
+    <tr><th style="width:80px"></th><th style="width:50%">当前</th><th>LLM 建议</th></tr>
+    <tr>
+      <td class="muted">标题</td>
+      <td><b>{{ old_title }}</b></td>
+      <td><b class="diff-new-text">{{ new_title }}</b></td>
+    </tr>
+    <tr>
+      <td class="muted">概要</td>
+      <td>{{ old_summary or '（无）' }}</td>
+      <td class="diff-new-text">{{ new_summary }}</td>
+    </tr>
+  </table>
+  <div class="diff-actions">
+    <a class="btn secondary" href="{{ url_for('chapter') }}">不采用，返回</a>
+    <form method="post" action="{{ url_for('chapter_meta_update', cid=cid) }}"
+          onsubmit="return confirm('确定用 LLM 建议替换当前的标题与概要？')">
+      <input type="hidden" name="title" value="{{ new_title }}">
+      <input type="hidden" name="summary" value="{{ new_summary }}">
+      <button type="submit" class="btn">采用建议，替换标题与概要</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

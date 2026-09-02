@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-head">
   <h1>模型配置</h1>
-  <p class="subtitle">统一走 OpenAI 兼容接口。按任务槽位分配不同档位模型，控制成本。配置保存在本地 config.json。</p>
+  <p class="subtitle">支持 OpenAI 兼容（/chat/completions）与 Anthropic（/v1/messages）两种 API 协议。按任务槽位分配不同档位模型，控制成本。配置保存在本地 config.json。</p>
 </div>
 
 {% if msg %}
@@ -35,9 +35,16 @@
     <div class="slot-fields" id="{{ slot_id }}__fields"
          {% if slot_id != 'generation' and s.inherit %}style="display:none"{% endif %}>
       <div class="field-row">
+        <label>API 协议</label>
+        <select id="{{ slot_id }}__protocol" name="{{ slot_id }}__protocol">
+          <option value="openai" {% if s.protocol != 'anthropic' %}selected{% endif %}>OpenAI 兼容</option>
+          <option value="anthropic" {% if s.protocol == 'anthropic' %}selected{% endif %}>Anthropic</option>
+        </select>
+      </div>
+      <div class="field-row">
         <label>服务商预设</label>
         <select id="{{ slot_id }}__preset" name="{{ slot_id }}__preset"
-                onchange="const u = PRESET_URLS[this.value]; if (u !== undefined) document.getElementById('{{ slot_id }}__base_url').value = u;">
+                onchange="applyPreset('{{ slot_id }}', this.value)">
           {% for pid, p in presets.items() %}
           <option value="{{ pid }}" {% if s.preset == pid %}selected{% endif %}>{{ p.name }}</option>
           {% endfor %}
@@ -75,9 +82,14 @@
 </form>
 
 <script>
-const PRESET_URLS = Object.fromEntries(
-  Object.entries({{ presets | tojson | safe }}).map(([k, v]) => [k, v.base_url])
-);
+const PRESETS = {{ presets | tojson | safe }};
+
+function applyPreset(slot, pid) {
+  const p = PRESETS[pid];
+  if (!p) return;
+  if (p.base_url !== undefined) document.getElementById(slot + '__base_url').value = p.base_url;
+  if (p.protocol) document.getElementById(slot + '__protocol').value = p.protocol;
+}
 
 function toggleInherit(slot) {
   const checked = document.getElementById(slot + '__inherit').checked;
@@ -92,6 +104,7 @@ function slotData(slot) {
     base_url: document.getElementById(slot + '__base_url')?.value || '',
     api_key: document.getElementById(slot + '__api_key')?.value || '',
     model: document.getElementById(slot + '__model')?.value || '',
+    protocol: document.getElementById(slot + '__protocol')?.value || 'openai',
   };
 }
 

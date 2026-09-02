@@ -3,9 +3,10 @@
 import os
 from datetime import datetime
 
-from json_store import lock_for, read_json, synchronized, write_json
+from stores.json_store import lock_for, read_json, synchronized, write_json
+from stores.paths import CONFIG_DIR
 
-PROJECT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "project.json")
+PROJECT_PATH = os.path.join(CONFIG_DIR, "project.json")
 _LOCK = lock_for(PROJECT_PATH)
 
 

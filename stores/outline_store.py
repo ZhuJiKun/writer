@@ -8,9 +8,10 @@ import os
 import uuid
 from datetime import datetime
 
-from json_store import lock_for, read_json, synchronized, write_json
+from stores.json_store import lock_for, read_json, synchronized, write_json
+from stores.paths import CONFIG_DIR
 
-OUTLINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outline.json")
+OUTLINE_PATH = os.path.join(CONFIG_DIR, "outline.json")
 _LOCK = lock_for(OUTLINE_PATH)
 
 # 章节状态：写作过程状态（写作中/待审校等）归写作工作台管，这里只有这两种

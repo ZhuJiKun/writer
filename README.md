@@ -41,20 +41,37 @@ python3 app.py
 | 文风控制 | 文风规范 + 范文样本，LLM 可抽取约束、生成范文 |
 | 模型配置 | 三槽位 LLM 配置，key 掩码显示，本地落盘 |
 
+## 项目结构
+
+```
+├── app.py               # Flask 入口，全部路由
+├── write_engine.py      # 写作编排：上下文组装、生成→审校→重写流水线、采纳回写
+├── llm/                 # LLM 层
+│   ├── client.py        #   HTTP 客户端（OpenAI/Anthropic 协议）+ 新书向导对话引擎
+│   ├── content.py       #   正文/大纲/审校/摘要/采纳抽取等调用逻辑
+│   ├── character.py     #   主角生成、对话式创建/调整角色
+│   └── prompts.py       #   全部 LLM 提示词集中存放（按域分节）
+├── stores/              # 持久化层（9 个 *_store.py + json_store.py 原子写助手）
+│   └── paths.py         #   数据目录常量（config/）唯一定义处
+├── config/              # 全部用户数据（JSON + characters_bck/ 备份，不提交 git）
+├── templates/           # Jinja2 模板
+└── static/              # 样式
+```
+
 ## 数据文件
 
-全部数据在项目根目录的 JSON 文件里（已被 .gitignore 排除）：
+全部数据在 `config/` 目录的 JSON 文件里（整个目录已被 .gitignore 排除）：
 
 | 文件 | 内容 |
 | --- | --- |
-| `config.json` | 模型配置（含 API Key，**注意保密**） |
-| `project.json` | 作品档案（向导产出） |
-| `characters.json` | 角色档案与状态 |
-| `characters_bck/` | 角色文件自动备份（保留近 1 个月） |
-| `outline.json` | 卷 / 章节大纲 |
-| `chapters.json` | 已生成章节正文与批次 |
-| `memory.json` | 逐章摘要、合并摘要 |
-| `bible.json` / `foreshadow.json` / `style.json` | 世界观 / 伏笔 / 文风 |
+| `config/config.json` | 模型配置（含 API Key，**注意保密**） |
+| `config/project.json` | 作品档案（向导产出） |
+| `config/characters.json` | 角色档案与状态 |
+| `config/characters_bck/` | 角色文件自动备份（保留近 1 个月） |
+| `config/outline.json` | 卷 / 章节大纲 |
+| `config/chapters.json` | 已生成章节正文与批次 |
+| `config/memory.json` | 逐章摘要、合并摘要 |
+| `config/bible.json` / `config/foreshadow.json` / `config/style.json` | 世界观 / 伏笔 / 文风 |
 
 想重置某块数据，停服后删对应 JSON 再启动即可（会自动重建为空结构）。
 

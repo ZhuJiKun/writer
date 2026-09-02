@@ -7,22 +7,24 @@
 - 世界观设定库：全量注入（条目都是短句，成本可控）
 - 未回收伏笔：提醒正文呼应
 - 分层记忆：合并摘要全量（远期）+ 最近 5 条逐章摘要（中期）+ 最近一章正文结尾（近期）
+- 场景锚点：上一章结尾的 time/place/present 快照（草稿期由审校顺带抽取，采纳时重抽覆盖），
+  附硬约束注入，防止跨章时空错乱
 """
 
 import threading
 import uuid
 from datetime import datetime
 
-import bible_store as bst
-import chapters_store as hst
-import character_store as cst
-import content_llm as cli
-import foreshadow_store as fst
-import memory_store as mst
-import outline_store as ost
-import project_store as ps
-import style_store as sst
-from llm_client import LLMError
+from stores import bible_store as bst
+from stores import chapters_store as hst
+from stores import character_store as cst
+from stores import foreshadow_store as fst
+from stores import memory_store as mst
+from stores import outline_store as ost
+from stores import project_store as ps
+from stores import style_store as sst
+from llm import content as cli
+from llm.client import LLMError
 
 MAX_REVISE_ROUNDS = 2      # 审校不通过时的最大重写次数（共最多 3 版正文）
 RECENT_FULL_CHARS = 3000   # 注入的上一章正文最大字符（取结尾部分）
@@ -215,9 +217,9 @@ def _memory_block(cur_no, cmap):
         parts.append("【近期剧情·逐章摘要】\n" + "\n".join(
             "第%d章《%s》：%s" % (c["no"], c.get("title", ""), c.get("summary", ""))
             for c in recent[-RECENT_SUMMARIES:]))
-    # 最近一章有正文的章节（草稿或已采纳均可），取结尾部分保持行文连贯
+    # 最近一章有正文的章节（草稿或已采纳均可），取其场景锚点与结尾部分保持行文连贯
     entries = hst.all_entries()
-    best = None  # (no, title, content)
+    best = None  # (no, title, content, scene_end)
     for cid, e in entries.items():
         if not e.get("content"):
             continue
@@ -226,8 +228,18 @@ def _memory_block(cur_no, cmap):
             continue
         _, ch, no = meta
         if no < cur_no and (best is None or no > best[0]):
-            best = (no, ch.get("title", ""), e["content"])
+            best = (no, ch.get("title", ""), e["content"], e.get("scene_end"))
     if best:
+        scene = best[3]
+        if scene:
+            parts.append(
+                "【上章结尾·场景锚点】（硬约束：本章开场时间不得早于锚点时间；"
+                "时间/地点跳跃必须用「次日清晨」「三天后」等明确交代；"
+                "不在场的人物不得无交代地出现或开口）\n"
+                "第%d章结尾——时间：%s｜地点：%s｜在场人物：%s"
+                % (best[0], scene.get("time") or "（未标注）",
+                   scene.get("place") or "（未标注）",
+                   "、".join(scene.get("present") or []) or "（未标注）"))
         parts.append("【上一章正文·结尾节选】\n第%d章《%s》：\n……%s"
                      % (best[0], best[1], best[2][-RECENT_FULL_CHARS:]))
     return parts
@@ -352,7 +364,7 @@ def _run_generate(tid, chapter_ids):
                     task["current"] = label + " · 按审校意见重写"
                     hst.set_status(cid, hst.ST_GENERATING)
                     try:
-                        text = cli.revise_chapter(ctx, ch["title"], text, issues, min_words)
+                        text = cli.revise_chapter(ctx, ch["title"], text, issues, min_words, note)
                     except LLMError as e:
                         review_err = "重写失败：" + str(e)
                         _log(tid, "%s：重写失败，保留上一版正文 — %s" % (label, e))
@@ -363,8 +375,10 @@ def _run_generate(tid, chapter_ids):
             _log(tid, "%s：审校调用失败（正文已保留为草稿）— %s" % (label, e))
         if review["history"]:
             review["final"] = review["history"][-1]
+        # 场景锚点取最后一轮审校的顺带抽取结果（对应最终版正文）；审校全失败则无锚点，不阻断
+        scene_end = (review["final"] or {}).get("scene_end") if review["final"] else None
         hst.set_status(cid, hst.ST_DRAFT, content=text, word_count=cli.count_words(text),
-                       review=review, error=review_err)
+                       review=review, error=review_err, scene_end=scene_end)
         ok += 1
         if passed:
             _log(tid, "%s：完成（约 %d 字）" % (label, cli.count_words(text)))
@@ -473,7 +487,10 @@ def _apply_adoption(cid, no, vol_title, title, entry, data):
             n_fore += 1
     if n_fore:
         changes.append("伏笔更新/新增 %d 条" % n_fore)
-    # 4. 大纲：状态与字数
+    # 4. 场景锚点：采纳时按定稿重抽，覆盖草稿期锚点（兜住采纳前的手动改稿）
+    if data.get("scene_end"):
+        hst.update_scene_end(cid, data["scene_end"])
+    # 5. 大纲：状态与字数
     ost.update_chapter(cid, status=ost.STATUS_DONE, word_count=entry.get("word_count", 0))
     changes.append("大纲标记已生成")
     return changes

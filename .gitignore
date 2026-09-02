@@ -1,14 +1,5 @@
-# 用户配置与个人数据（不落库）
-config.json
-project.json
-characters.json
-characters_bck/
-outline.json
-chapters.json
-bible.json
-foreshadow.json
-style.json
-memory.json
+# 用户配置与个人数据（不落库，全部集中在 config/）
+config/
 *.corrupt-*
 
 # 运行时与系统杂项

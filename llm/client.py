@@ -1,10 +1,14 @@
-"""新书向导的对话引擎：优先走已配置的 LLM（generation 槽位），失败或未配置时降级为 mock 规则。"""
+"""新书向导的对话引擎 + LLM HTTP 客户端（OpenAI / Anthropic 协议）。
+
+向导提示词与开场白统一在 llm/prompts.py；本文件保留步骤推进与抽取应用逻辑。
+"""
 
 import json
 import urllib.error
 import urllib.request
 
-import config_store as cs
+from stores import config_store as cs
+from llm import prompts
 
 # 向导步骤顺序；推进到 "done" 即收集完毕
 STEPS = [
@@ -14,48 +18,7 @@ STEPS = [
     ("style", "文风与叙事规范"),
 ]
 
-STEP_OPENERS = {
-    "profile": "你好，我是你的写作搭档。先聊聊作品定位：这本书是什么题材（玄幻 / 都市 / 科幻 / 悬疑…）？想写给什么样的读者？大概计划写多少章？",
-    "premise": "接下来聊核心创意：用一两句话说说这个故事讲什么？（主角是谁，要做什么，最大的冲突是什么）",
-    "background": "说说故事发生的世界：时代 / 世界类型、核心规则或力量体系、主要舞台（城市 / 势力）？",
-    "style": "最后定文风：希望读起来是什么感觉？（如：诙谐幽默、冷峻克制、热血爽文…）也可以说人称与视角偏好。",
-}
-
-_JSON_HINT = (
-    "只输出 JSON，不要输出任何其他内容："
-    '{"reply": "对用户的回应（中文，简短）", "extracted": {...}, "advance": true 或 false}'
-)
-
-_STEP_SYS = {
-    "profile": (
-        "你是小说写作向导，当前阶段：作品定位。从用户回答中抽取 genre（题材）、"
-        "audience（目标读者，可留空）、length（预计篇幅，可留空）。"
-        "至少拿到题材时 advance=true，否则继续追问一句。" + _JSON_HINT.replace("{...}", '{"genre":"","audience":"","length":""}')
-    ),
-    "premise": (
-        "你是小说写作向导，当前阶段：核心创意与概要。从用户回答中抽取 logline（一句话梗概，可润色），"
-        "并由你补全一版 synopsis（扩展概要，约 150 字，含起因-冲突-结局方向）。"
-        "logline 可用即 advance=true。" + _JSON_HINT.replace("{...}", '{"logline":"","synopsis":""}')
-    ),
-    "background": (
-        "你是小说写作向导，当前阶段：故事背景。从用户回答中抽取 "
-        "era（时代 / 世界类型）、rules（核心规则 / 力量体系）、stage（主要舞台 / 地理势力）。"
-        "用户没提到的项可由你合理补全。抽取后 advance=true。"
-        + _JSON_HINT.replace("{...}", '{"era":"","rules":"","stage":""}')
-    ),
-    "style": (
-        "你是小说写作向导，当前阶段：文风与叙事规范。根据用户描述的文风偏好，生成完整的 style_prompt"
-        "（写给正文生成模型的提示词，含：语调、人称 / POV、时态、段落习惯、对话比例、禁忌，一段话说清）。"
-        "生成后 advance=true。" + _JSON_HINT.replace("{...}", '{"style_prompt":""}')
-    ),
-    "done": (
-        "你是小说写作向导，作品档案已建立。用户会继续提出修改意见或闲聊。"
-        "若用户要修改档案，把需要更新的字段放入 extracted（只放要改的字段，键可选："
-        "title / genre / audience / length / logline / synopsis / era / rules / stage / style_prompt），"
-        "值要完整（如改文风就给出完整的新 style_prompt）；若只是闲聊或确认，extracted 为空对象。"
-        "始终 advance=false。" + _JSON_HINT.replace("{...}", '{"title":"","genre":"", "...": "..."}')
-    ),
-}
+STEP_OPENERS = prompts.WIZARD_STEP_OPENERS
 
 def llm_available():
     return slot_available("generation")
@@ -149,10 +112,92 @@ class LLMError(Exception):
     pass
 
 
+def _anthropic_url(base_url):
+    """Anthropic base_url 约定：填到 /v1 则补 /messages，否则补 /v1/messages。"""
+    base = base_url.rstrip("/")
+    return base + "/messages" if base.endswith("/v1") else base + "/v1/messages"
+
+
+def _parse_sse_text(raw):
+    """解析 Anthropic SSE 流，只拼接 text_delta（跳过 thinking_delta / signature_delta 等）。
+
+    某些转发网关会无视 stream=false 强制返回事件流。流内 error 事件抛 LLMError。
+    """
+    texts = []
+    for line in raw.splitlines():
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            evt = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        etype = evt.get("type")
+        if etype == "content_block_delta":
+            delta = evt.get("delta") or {}
+            if delta.get("type") == "text_delta":
+                texts.append(delta.get("text", ""))
+        elif etype == "error":
+            err = evt.get("error") or {}
+            raise LLMError("流式响应错误：%s" % (err.get("message") or evt))
+    if not texts:
+        raise LLMError("流式响应中未解析到正文内容（可能 max_tokens 被 thinking 消耗殆尽）")
+    return "".join(texts)
+
+
+def _call_anthropic(messages, gen):
+    """Anthropic Messages API：system 抽为顶层字段，max_tokens 必填；返回 content 字符串。
+    兼容强制 SSE 流式响应的转发网关（如内部 proxy/forward）。"""
+    system_parts = [str(m.get("content", "")) for m in messages if m.get("role") == "system"]
+    turns = [{"role": m["role"], "content": str(m.get("content", ""))}
+             for m in messages if m.get("role") in ("user", "assistant")]
+    payload = {
+        "model": gen["model"],
+        "max_tokens": 8192,
+        "messages": turns,
+    }
+    if system_parts:
+        payload["system"] = "\n\n".join(system_parts)
+    req = urllib.request.Request(
+        _anthropic_url(gen["base_url"]),
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": gen["api_key"],
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            raw = resp.read().decode("utf-8")
+            is_sse = "text/event-stream" in (resp.headers.get("Content-Type") or "")
+        if is_sse or raw.lstrip().startswith("event:"):
+            return _parse_sse_text(raw)
+        body = json.loads(raw)
+        return "".join(b.get("text", "") for b in body.get("content", [])
+                       if isinstance(b, dict) and b.get("type") == "text")
+    except urllib.error.HTTPError as e:
+        try:
+            err = json.loads(e.read().decode("utf-8"))
+            msg = err.get("error", {}).get("message") or str(err)
+        except Exception:
+            msg = e.reason
+        raise LLMError(f"HTTP {e.code}：{msg}")
+    except LLMError:
+        raise
+    except Exception as e:
+        raise LLMError(f"请求失败：{e}")
+
+
 def _call_llm(messages, slot="generation"):
     """调指定槽位的模型，返回 content 字符串；失败抛 LLMError。"""
     cfg = cs.load_config()
     gen = cs.effective_slot(cfg, slot if slot in cs.SLOTS else "generation")
+    if gen.get("protocol") == "anthropic":
+        return _call_anthropic(messages, gen)
     payload = json.dumps({
         "model": gen["model"],
         "messages": messages,
@@ -182,7 +227,7 @@ def _call_llm(messages, slot="generation"):
 
 def _llm_turn(step, history):
     """调模型要求返回结构化 JSON；解析失败时追加上下文重试，最多 3 次。失败抛 LLMError。"""
-    sys_prompt = _STEP_SYS.get(step, _STEP_SYS["profile"])
+    sys_prompt = prompts.WIZARD_STEP_SYS.get(step, prompts.WIZARD_STEP_SYS["profile"])
     messages = [{"role": "system", "content": sys_prompt}] + history[-10:]
     last_content = ""
     for _ in range(3):

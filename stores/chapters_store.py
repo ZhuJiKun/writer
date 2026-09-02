@@ -12,9 +12,10 @@ import os
 import uuid
 from datetime import datetime
 
-from json_store import lock_for, read_json, synchronized, write_json
+from stores.json_store import lock_for, read_json, synchronized, write_json
+from stores.paths import CONFIG_DIR
 
-CHAPTERS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chapters.json")
+CHAPTERS_PATH = os.path.join(CONFIG_DIR, "chapters.json")
 _LOCK = lock_for(CHAPTERS_PATH)
 
 # 章节内容状态
@@ -116,7 +117,10 @@ def planned_batches():
 
 # ---------- 章节内容 ----------
 
-def new_entry(chapter_id, batch_id="", min_words=1500):
+# entry 的 revise 字段：暂存一份「LLM 修改稿」（{"instruction","text","created_at"}），
+# 等用户在对比页二选一；采用或放弃后删除该字段。reset_for_regen 会一并清掉。
+
+def new_entry(chapter_id, batch_id="", min_words=1500, note=""):
     return {
         "chapter_id": chapter_id,
         "batch_id": batch_id,
@@ -124,7 +128,8 @@ def new_entry(chapter_id, batch_id="", min_words=1500):
         "content": "",
         "word_count": 0,
         "min_words": min_words,
-        "note": "",                      # 重新生成时的附加要求
+        "note": note,                    # 生成附加要求（确认细纲时的补充 / 重新生成时的要求）
+        "scene_end": None,               # 本章结尾场景锚点 {"time","place","present"}，草稿期由审校顺带抽取
         "review": {"rounds": 0, "final": None, "history": []},
         "error": "",
         "created_at": _now(),
@@ -164,6 +169,77 @@ def set_status(chapter_id, status, **fields):
 
 
 @synchronized(_LOCK)
+def update_content(chapter_id, content, word_count):
+    """用户手动编辑正文：只改正文与字数，不动状态/审校记录，以用户文本为准。"""
+    store = load_store()
+    entry = store["contents"].get(chapter_id)
+    if not entry:
+        return None
+    entry["content"] = content
+    entry["word_count"] = word_count
+    entry["updated_at"] = _now()
+    save_store(store)
+    return entry
+
+
+@synchronized(_LOCK)
+def set_revise_draft(chapter_id, instruction, text):
+    """暂存一份 LLM 修改稿，等用户在对比页二选一。"""
+    store = load_store()
+    entry = store["contents"].get(chapter_id)
+    if not entry:
+        return None
+    entry["revise"] = {"instruction": instruction, "text": text, "created_at": _now()}
+    entry["updated_at"] = _now()
+    save_store(store)
+    return entry
+
+
+@synchronized(_LOCK)
+def clear_revise_draft(chapter_id):
+    """放弃修改稿：保留原文，删除暂存。"""
+    store = load_store()
+    entry = store["contents"].get(chapter_id)
+    if not entry:
+        return None
+    if "revise" in entry:
+        entry.pop("revise")
+        entry["updated_at"] = _now()
+        save_store(store)
+    return entry
+
+
+@synchronized(_LOCK)
+def apply_revise_draft(chapter_id, word_count):
+    """采用修改稿：暂存文本替换正文，删除暂存。不动状态/审校记录（不走审校）。"""
+    store = load_store()
+    entry = store["contents"].get(chapter_id)
+    text = ((entry or {}).get("revise") or {}).get("text") or ""
+    text = text.strip()
+    if not entry or not text:
+        return None
+    entry["content"] = text
+    entry["word_count"] = word_count
+    entry.pop("revise", None)
+    entry["updated_at"] = _now()
+    save_store(store)
+    return entry
+
+
+@synchronized(_LOCK)
+def update_scene_end(chapter_id, scene_end):
+    """写入/清空本章结尾场景锚点（手动修正或抽取结果回写）。只动锚点，不动其他字段。"""
+    store = load_store()
+    entry = store["contents"].get(chapter_id)
+    if not entry:
+        return None
+    entry["scene_end"] = scene_end
+    entry["updated_at"] = _now()
+    save_store(store)
+    return entry
+
+
+@synchronized(_LOCK)
 def reset_for_regen(chapter_id, note=""):
     """把章节重置为排队重生成：清空正文与审校记录，保留批次关联与字数要求。
     note 为空时同时清空上一次的附加要求，避免残留进 prompt。"""
@@ -176,10 +252,12 @@ def reset_for_regen(chapter_id, note=""):
         "content": "",
         "word_count": 0,
         "note": note,
+        "scene_end": None,       # 正文作废，场景锚点一并作废
         "review": {"rounds": 0, "final": None, "history": []},
         "error": "",
         "updated_at": _now(),
     })
+    entry.pop("revise", None)  # 正文都清了，暂存的修改稿一并作废
     save_store(store)
     return entry
 

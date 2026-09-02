@@ -15,11 +15,79 @@
   </p>
 </div>
 
-<div class="card">
-  {% for p in paragraphs %}
-  <p style="line-height:2; margin:0 0 14px; text-indent:2em">{{ p }}</p>
-  {% endfor %}
+{% if err %}<div class="alert">❌ {{ err }}</div>{% endif %}
+{% if msg %}<div class="toast-ok">✅ {{ msg }}</div>{% endif %}
+
+{% if revise_draft %}
+<div class="card revise-banner">
+  <span>💬 有一份待处理的 LLM 修改稿（要求：{{ revise_draft.instruction }} · {{ revise_draft.created_at }}）</span>
+  <a class="btn-inline" href="{{ url_for('chapter_text_compare', cid=entry.chapter_id) }}">去对比选择 →</a>
 </div>
+{% endif %}
+
+<div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px">
+    <h2 style="margin:0">正文</h2>
+    <div>
+      <button type="button" class="btn-inline" id="editToggle" onclick="toggleEdit()">✏️ 编辑正文</button>
+      <button type="button" class="btn-inline" id="reviseToggle" onclick="toggleRevise()"
+              {% if not llm_on %}disabled title="未配置生成模型"{% endif %}>✨ LLM 修改</button>
+    </div>
+  </div>
+
+  <div id="readMode">
+    {% for p in paragraphs %}
+    <p style="line-height:2; margin:0 0 14px; text-indent:2em">{{ p }}</p>
+    {% endfor %}
+  </div>
+
+  <form id="editMode" method="post" action="{{ url_for('chapter_text_save', cid=entry.chapter_id) }}" style="display:none">
+    <textarea name="content" rows="22" style="width:100%; line-height:1.9">{{ entry.content }}</textarea>
+    <p class="muted" style="margin:8px 0">保存后以你修改后的文本为准，字数会自动重算；已采纳章节的逐章摘要不会自动重写，如需更新请到「分层记忆」重新压缩。若改动了结尾的时间/地点/在场人物，请回「写作工作台」章节列表修正本章锚点（采纳时会自动重抽）。</p>
+    <button type="submit" class="btn">保存修改</button>
+    <button type="button" class="btn-inline" onclick="toggleEdit()">取消</button>
+  </form>
+
+  <form id="reviseMode" method="post" action="{{ url_for('chapter_text_revise', cid=entry.chapter_id) }}"
+        style="display:none" onsubmit="return guardRevise(this)">
+    <p class="muted" style="margin:0 0 8px">
+      适用于「整体满意、只微调某些句子」的场景：LLM 只改你要求的部分，其余保持原文；生成后进入左右对比页，由你二选一（不会触发审校）。
+    </p>
+    <textarea name="instruction" rows="3" style="width:100%" required
+              placeholder="例如：把周坤和王萌萌那段对话改得更冷淡一些 / 结尾再加一点悬念"></textarea>
+    <div style="margin-top:8px">
+      <button type="submit" class="btn" id="reviseSubmit">生成修改稿</button>
+      <button type="button" class="btn-inline" onclick="toggleRevise()">取消</button>
+    </div>
+  </form>
+</div>
+
+<script>
+function _show(el, on) { el.style.display = on ? 'block' : 'none'; }
+function toggleEdit() {
+  var read = document.getElementById('readMode');
+  var edit = document.getElementById('editMode');
+  var revise = document.getElementById('reviseMode');
+  var editing = edit.style.display !== 'none';
+  _show(edit, !editing); _show(read, editing); _show(revise, false);
+  document.getElementById('editToggle').textContent = editing ? '✏️ 编辑正文' : '👁 返回阅读';
+  document.getElementById('reviseToggle').textContent = '✨ LLM 修改';
+}
+function toggleRevise() {
+  var read = document.getElementById('readMode');
+  var edit = document.getElementById('editMode');
+  var revise = document.getElementById('reviseMode');
+  var revising = revise.style.display !== 'none';
+  _show(revise, !revising); _show(read, revising); _show(edit, false);
+  document.getElementById('reviseToggle').textContent = revising ? '✨ LLM 修改' : '👁 返回阅读';
+  document.getElementById('editToggle').textContent = '✏️ 编辑正文';
+}
+function guardRevise(form) {
+  var btn = document.getElementById('reviseSubmit');
+  btn.disabled = true; btn.textContent = 'LLM 修改中…';
+  return true;
+}
+</script>
 
 {% if review %}
 <div class="card">

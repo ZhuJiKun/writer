@@ -62,6 +62,9 @@
       </tr>
       {% endfor %}
     </table>
+    <p class="kv mt"><b>补充要求</b><span class="muted">（可选，对本批每一章生效，会随细纲一并传给 LLM）</span></p>
+    <textarea name="note" rows="2" style="width:100%"
+              placeholder="例如：每章 2000 字以上；对话多一些、节奏轻快；这几章重点刻画女主的反差感……"></textarea>
     <div class="action-bar mt">
       <button type="submit" class="btn">✅ 确认细纲，开始生成 {{ pending.plan|length }} 章</button>
       <button type="submit" class="btn secondary" formnovalidate
@@ -116,11 +119,11 @@
   <p class="muted">大纲里还没有章节。先在上方规划一批，或到「章节大纲」页手动添加。</p>
   {% else %}
   <form method="post" id="chapter-form">
-    <table>
+    <table class="chapter-table">
       <tr>
         <th style="width:36px"><input type="checkbox" id="check-all" title="全选可操作章节"></th><th style="width:48px">章号</th><th style="width:90px">卷</th>
-        <th>章节</th><th style="width:80px">状态</th><th style="width:70px">字数</th>
-        <th style="width:80px">审校</th><th style="width:60px">正文</th>
+        <th>章节</th><th style="width:170px">锚点</th><th style="width:80px">状态</th><th style="width:70px">字数</th>
+        <th style="width:88px">审校</th><th style="width:60px">正文</th>
       </tr>
       {% for r in rows %}
       <tr>
@@ -133,8 +136,73 @@
         <td class="muted">{{ r.vol }}</td>
         <td>
           <b>{{ r.title }}</b>
-          {% if r.summary %}<p class="muted" style="margin:2px 0">{{ r.summary }}</p>{% endif %}
+          {% if r.edit_ok %}
+          <details class="vol-edit ch-meta-edit">
+            <summary class="meta-edit-btn" title="修改标题 / 概要">✏️</summary>
+            <div class="edit-pop">
+              <label class="muted" style="font-size:12px">标题</label>
+              <input type="text" name="title" value="{{ r.title }}" required form="meta-{{ r.cid }}">
+              <label class="muted" style="font-size:12px">概要</label>
+              <textarea name="summary" rows="3" form="meta-{{ r.cid }}">{{ r.summary }}</textarea>
+              <button type="submit" class="btn secondary" form="meta-{{ r.cid }}">保存修改</button>
+            </div>
+          </details>
+          {% if r.read_ok %}
+          <details class="vol-edit ch-meta-edit">
+            <summary class="meta-edit-btn" title="LLM 依据正文重新生成标题 / 概要">🤖</summary>
+            <div class="edit-pop">
+              <label class="muted" style="font-size:12px">要求（可选，随正文一起发给 LLM）</label>
+              <textarea name="requirement" rows="3" form="metallm-{{ r.cid }}"
+                        placeholder="例如：标题更悬念一点 / 概要突出女主的出场"></textarea>
+              <button type="submit" class="btn secondary" form="metallm-{{ r.cid }}"
+                      {{ 'disabled' if not llm_on }}>✨ LLM 生成标题与概要</button>
+            </div>
+          </details>
+          {% endif %}
+          {% endif %}
+          {% if r.summary %}
+          <div class="sum-clamp">
+            <p class="muted sum-text">{{ r.summary }}</p>
+            <div class="sum-pop">{{ r.summary }}</div>
+          </div>
+          {% endif %}
           {% if r.error %}<p class="inline-status err" style="margin:2px 0">{{ r.error }}</p>{% endif %}
+        </td>
+        <td>
+          {% if r.has_entry %}
+          <details class="vol-edit anchor-edit">
+            <summary>
+              {% if r.scene_end %}
+              <span class="anchor-box" title="点击修正场景锚点">
+                {%- if r.scene_end.time %}<span class="a-line a-time">{{ r.scene_end.time }}</span>{% endif -%}
+                {%- if r.scene_end.place %}<span class="a-line">{{ r.scene_end.place }}</span>{% endif -%}
+                {%- if r.scene_end.present %}
+                <span class="a-line" title="{{ r.scene_end.present | join('、') }}">👥 {{ r.scene_end.present[:2] | join('、') }}{% if r.scene_end.present | length > 2 %} 等 {{ r.scene_end.present | length }} 人{% endif %}</span>
+                {% endif -%}
+              </span>
+              {% else %}
+              <span class="anchor-add" title="设置本章结尾场景锚点">{% if r.read_ok %}＋ 补抽 / 填写{% else %}＋ 填写{% endif %}</span>
+              {% endif %}
+            </summary>
+            <div class="edit-pop">
+              <label class="muted" style="font-size:12px">时间（如：军训第3天·傍晚）</label>
+              <input type="text" name="time" form="anchor-{{ r.cid }}"
+                     value="{{ r.scene_end.time if r.scene_end }}">
+              <label class="muted" style="font-size:12px">地点</label>
+              <input type="text" name="place" form="anchor-{{ r.cid }}"
+                     value="{{ r.scene_end.place if r.scene_end }}">
+              <label class="muted" style="font-size:12px">在场人物（顿号/逗号分隔）</label>
+              <input type="text" name="present" form="anchor-{{ r.cid }}"
+                     value="{{ r.scene_end.present | join('、') if r.scene_end }}">
+              <button type="submit" class="btn secondary" form="anchor-{{ r.cid }}">保存锚点</button>
+              {% if r.read_ok and not r.scene_end %}
+              <button type="submit" class="btn secondary" form="anchorx-{{ r.cid }}"
+                      {{ 'disabled' if not llm_on }}>✨ LLM 从正文补抽</button>
+              {% endif %}
+              <label class="muted" style="font-size:12px">三项留空保存 = 清空锚点</label>
+            </div>
+          </details>
+          {% else %}<span class="muted">—</span>{% endif %}
         </td>
         <td>
           {% set color = {'planned': 'gray', 'generating': 'yellow', 'reviewing': 'yellow',
@@ -142,10 +210,10 @@
           <span class="badge {{ color }}">{{ r.status_label }}</span>
         </td>
         <td class="cell-center">{{ r.word_count or '—' }}</td>
-        <td>
+        <td class="review-cell">
           {% if r.review %}
           <span class="badge {{ 'green' if r.review.pass else 'red' }}">{{ r.review.score }} 分</span>
-          <span class="muted">{{ r.review.issues|length }} 问题</span>
+          <span class="muted review-issues">{{ r.review.issues|length }} 问题</span>
           {% else %}<span class="muted">—</span>{% endif %}
         </td>
         <td class="cell-center">
@@ -166,6 +234,19 @@
       <span class="inline-status">勾选「排队 / 失败 / 草稿」可重新生成；勾选「草稿」可采纳</span>
     </div>
   </form>
+  {# 每章的标题/概要编辑表单：表格在 #chapter-form 内不能嵌套表单，故放外部用 form 属性关联 #}
+  {% for r in rows %}{% if r.edit_ok %}
+  <form id="meta-{{ r.cid }}" method="post" action="{{ url_for('chapter_meta_update', cid=r.cid) }}"></form>
+  {% if r.read_ok %}
+  <form id="metallm-{{ r.cid }}" method="post" action="{{ url_for('chapter_meta_llm', cid=r.cid) }}"></form>
+  {% endif %}
+  {% endif %}
+  {% if r.has_entry %}
+  <form id="anchor-{{ r.cid }}" method="post" action="{{ url_for('chapter_anchor_save', cid=r.cid) }}"></form>
+  {% if r.read_ok %}
+  <form id="anchorx-{{ r.cid }}" method="post" action="{{ url_for('chapter_anchor_extract', cid=r.cid) }}"></form>
+  {% endif %}
+  {% endif %}{% endfor %}
   {% endif %}
 </div>
 
@@ -181,6 +262,11 @@
     });
   });
 })();
+// 概要悬浮弹层：未超出三行的不启用悬浮（避免短概要也弹框）
+document.querySelectorAll('.sum-clamp').forEach(function (w) {
+  var t = w.querySelector('.sum-text');
+  if (t && t.scrollHeight <= t.clientHeight + 1) w.classList.add('sum-no-more');
+});
 </script>
 {% endif %}
 

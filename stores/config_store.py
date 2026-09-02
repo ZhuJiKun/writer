@@ -2,18 +2,20 @@
 
 import os
 
-from json_store import lock_for, read_json, synchronized, write_json
+from stores.json_store import lock_for, read_json, synchronized, write_json
+from stores.paths import CONFIG_DIR
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 _LOCK = lock_for(CONFIG_PATH)
 
 PRESETS = {
-    "custom": {"name": "自定义", "base_url": "", "model_hint": "模型名，如 my-model"},
-    "openai": {"name": "OpenAI", "base_url": "https://api.openai.com/v1", "model_hint": "如 gpt-4o / gpt-4o-mini"},
-    "deepseek": {"name": "DeepSeek", "base_url": "https://api.deepseek.com/v1", "model_hint": "如 deepseek-chat / deepseek-reasoner"},
-    "moonshot": {"name": "Kimi（Kimi Code 订阅）", "base_url": "https://api.kimi.com/coding/v1", "model_hint": "如 k3 / kimi-for-coding"},
-    "qwen": {"name": "通义千问", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model_hint": "如 qwen-plus / qwen-max"},
-    "glm": {"name": "智谱 GLM", "base_url": "https://open.bigmodel.cn/api/paas/v4", "model_hint": "如 glm-4-plus / glm-4-air"},
+    "custom": {"name": "自定义", "base_url": "", "protocol": "openai", "model_hint": "模型名，如 my-model"},
+    "openai": {"name": "OpenAI", "base_url": "https://api.openai.com/v1", "protocol": "openai", "model_hint": "如 gpt-4o / gpt-4o-mini"},
+    "deepseek": {"name": "DeepSeek", "base_url": "https://api.deepseek.com/v1", "protocol": "openai", "model_hint": "如 deepseek-chat / deepseek-reasoner"},
+    "moonshot": {"name": "Kimi（Kimi Code 订阅）", "base_url": "https://api.kimi.com/coding/v1", "protocol": "openai", "model_hint": "如 kimi-for-coding / k3"},
+    "anthropic": {"name": "Anthropic（Claude）", "base_url": "https://api.anthropic.com", "protocol": "anthropic", "model_hint": "如 claude-sonnet-4-5 / claude-haiku-4-5"},
+    "qwen": {"name": "通义千问", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "protocol": "openai", "model_hint": "如 qwen-plus / qwen-max"},
+    "glm": {"name": "智谱 GLM", "base_url": "https://open.bigmodel.cn/api/paas/v4", "protocol": "openai", "model_hint": "如 glm-4-plus / glm-4-air"},
 }
 
 SLOTS = {
@@ -22,7 +24,7 @@ SLOTS = {
     "extraction": {"name": "状态抽取 / 摘要", "desc": "便宜小模型，负责事实抽取与章节压缩，成本优先"},
 }
 
-DEFAULT_SLOT = {"preset": "custom", "base_url": "", "api_key": "", "model": "", "inherit": False}
+DEFAULT_SLOT = {"preset": "custom", "base_url": "", "api_key": "", "model": "", "protocol": "openai", "inherit": False}
 
 
 def default_config():

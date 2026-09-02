@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}修改对比 · 第{{ no }}章 {{ title }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>第 {{ no }} 章《{{ title }}》 · LLM 修改对比</h1>
+  <p class="subtitle">修改要求：{{ draft.instruction }} · 生成于 {{ draft.created_at }}</p>
+  <p class="mt">
+    <a class="btn-inline" href="{{ url_for('chapter_text', cid=entry.chapter_id) }}">← 返回阅读（暂不决定）</a>
+  </p>
+</div>
+
+<p class="muted" style="margin-bottom:12px">
+  只展示有差异的段落，相同内容已折叠；<mark class="diff-del">红色删除线</mark> 为原文被改动的部分，<mark class="diff-ins">绿色</mark> 为修改稿的新内容。
+  选择其中一份作为正文，另一份将被删除、不可恢复。采用新文本只替换正文，不触发审校；
+  已采纳章节的逐章摘要不会自动重写，如需更新请到「分层记忆」重新压缩。
+</p>
+
+<div class="card">
+  <h2>
+    差异对比
+    <span class="badge">原文 约 {{ entry.word_count }} 字</span>
+    <span class="badge green">修改稿 约 {{ new_words }} 字</span>
+  </h2>
+  <div class="diff-table">
+    <div class="diff-row diff-head">
+      <div class="diff-cell">原文（当前正文）</div>
+      <div class="diff-cell">LLM 修改稿</div>
+    </div>
+    {% for r in rows %}
+      {% if r.kind == "same" %}
+      <div class="diff-row diff-same">
+        <div class="diff-cell">⋯ ⋯ ⋯ {{ r.count }} 段内容相同，已折叠 ⋯ ⋯ ⋯</div>
+      </div>
+      {% else %}
+      <div class="diff-row">
+        <div class="diff-cell {{ r.kind }}-old">
+          {% if r.old %}{{ r.old | safe }}{% endif %}
+        </div>
+        <div class="diff-cell {{ r.kind }}-new">
+          {% if r.new %}{{ r.new | safe }}{% endif %}
+        </div>
+      </div>
+      {% endif %}
+    {% endfor %}
+  </div>
+  <div class="diff-actions">
+    <form method="post" action="{{ url_for('chapter_text_revise_apply', cid=entry.chapter_id) }}"
+          onsubmit="return confirm('确定保留原文？修改稿将被删除。')">
+      <input type="hidden" name="decision" value="old">
+      <button type="submit" class="btn secondary">保留原文，删除修改稿</button>
+    </form>
+    <form method="post" action="{{ url_for('chapter_text_revise_apply', cid=entry.chapter_id) }}"
+          onsubmit="return confirm('确定采用新文本？原文将被替换、不可恢复。')">
+      <input type="hidden" name="decision" value="new">
+      <button type="submit" class="btn">采用新文本，替换原文</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -9,9 +9,10 @@ import re
 import uuid
 from datetime import datetime
 
-from json_store import lock_for, read_json, synchronized, write_json
+from stores.json_store import lock_for, read_json, synchronized, write_json
+from stores.paths import CONFIG_DIR
 
-MEMORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory.json")
+MEMORY_PATH = os.path.join(CONFIG_DIR, "memory.json")
 _LOCK = lock_for(MEMORY_PATH)
 
 SOURCE_OUTLINE = "细纲"

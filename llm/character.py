@@ -1,18 +1,13 @@
-"""角色模块的 LLM 能力：从作品档案生成主角、对话式创建/调整角色。"""
+"""角色模块的 LLM 能力：从作品档案生成主角、对话式创建/调整角色。
+
+提示词文本统一在 llm/prompts.py。
+"""
 
 import json
 
-import character_store as cst
-from llm_client import LLMError, as_bool, chat_json, llm_available
-
-_STATE_KEYS_DESC = "、".join(cst.STATE_KEYS)
-
-_CHAR_JSON_SCHEMA = (
-    '{"name":"","gender":"男/女/其他","personality":"性格（2-3 句）",'
-    '"background":"背景来历（2-4 句）","appearance":"外貌形象（1-2 句）",'
-    '"state":{"位置":"","身体状态":"","心理状态":"","当前目标":"","已知秘密":"","持有物/能力":""},'
-    '"relationships":[{"target_name":"其他角色名","relation":"关系（如 师徒/亦敌亦友）","note":"补充说明，可空"}]}'
-)
+from stores import character_store as cst
+from llm import prompts
+from llm.client import LLMError, as_bool, chat_json, llm_available
 
 
 def generate_protagonist(project):
@@ -20,12 +15,7 @@ def generate_protagonist(project):
     if not llm_available():
         raise LLMError("未配置生成模型，请先到「模型配置」页填写 generation 槽位")
     bg = project.get("background", {})
-    sys_prompt = (
-        "你是小说角色设定师。根据下面的作品档案，为主角生成完整的人物档案。\n"
-        "要求：人物要贴合题材与故事概要，性格和背景要有记忆点，外貌具体到可描写；"
-        "state 是故事开局时主角的动态状态，各项填开局值。\n"
-        "只输出 JSON，不要输出任何其他内容：" + _CHAR_JSON_SCHEMA + "\n\n"
-        "【作品档案】\n"
+    archive = (
         f"书名：{project.get('title') or '（未定）'}\n"
         f"题材：{project.get('genre')}\n"
         f"一句话梗概：{project.get('logline')}\n"
@@ -34,7 +24,8 @@ def generate_protagonist(project):
         f"规则/力量体系：{bg.get('rules')}\n"
         f"舞台/势力：{bg.get('stage')}\n"
     )
-    data = chat_json(sys_prompt, [{"role": "user", "content": "请生成主角档案。"}])
+    data = chat_json(prompts.p_generate_protagonist(archive),
+                     [{"role": "user", "content": "请生成主角档案。"}])
     if not data.get("name"):
         raise LLMError("模型返回的角色缺少 name 字段")
     return _normalize_char_data(data)
@@ -74,21 +65,14 @@ def _roster(exclude_id=None):
              if c.get("id") != exclude_id and c.get("name")]
     if not lines:
         return ""
-    return ("\n【已存在的角色】\n" + "\n".join(lines)
-            + "\nrelationships 的 target_name 必须严格使用上面名单里的名字；与名单外角色的关系不要写。\n")
+    return prompts.p_char_chat_roster("\n".join(lines))
 
 
 def _build_chat_sys(char):
-    base = (
-        "你是小说角色设定师，通过与用户对话来" + ("创建" if char is None else "修改")
-        + "一个小说角色（" + ("配角" if char is None else char.get("role_type", "角色")) + "）。\n"
-        "每轮从用户回答中抽取已知字段放入 extracted；信息不足时继续追问一两个关键问题"
-        "（姓名、性别、性格、背景、与主角的关系、故事开局时的状态）；"
-        "当姓名、性格、背景都已明确时 done=true，并把剩余空缺字段由你合理补全后一并放入 extracted。\n"
-        "reply 用中文、简短自然。" + _JSON_HINT
-    )
+    base = prompts.p_char_chat_base("创建" if char is None else "修改",
+                                    "配角" if char is None else char.get("role_type", "角色"))
     if char is None:
-        return base + _roster() + "\n抽取字段格式：" + _CHAR_JSON_SCHEMA
+        return base + _roster() + "\n抽取字段格式：" + prompts.CHAR_JSON_SCHEMA
     # 调整已有角色：只放要改的字段
     snapshot = json.dumps({
         "name": char.get("name"), "gender": char.get("gender"),
@@ -97,16 +81,9 @@ def _build_chat_sys(char):
         "state": char.get("state"), "relationships": char.get("relationships"),
     }, ensure_ascii=False)
     return base + _roster(exclude_id=char.get("id")) + (
-        "\nextracted 只放用户要求修改的字段（值要完整，如改性格就给完整新性格）；"
-        "用户只是闲聊或确认时 extracted 为空对象；done 始终为 false。\n"
-        "【当前角色档案】\n" + snapshot + "\n抽取字段格式：" + _CHAR_JSON_SCHEMA
+        prompts.CHAR_CHAT_ADJUST_RULES + snapshot
+        + "\n抽取字段格式：" + prompts.CHAR_JSON_SCHEMA
     )
-
-
-_JSON_HINT = (
-    "只输出 JSON，不要输出任何其他内容："
-    '{"reply":"对用户的回应","extracted":{...},"done":true或false}'
-)
 
 
 def _merge_extracted(dst, extracted):

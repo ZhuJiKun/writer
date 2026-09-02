@@ -4,9 +4,10 @@ import os
 import uuid
 from datetime import datetime
 
-from json_store import lock_for, read_json, synchronized, write_json
+from stores.json_store import lock_for, read_json, synchronized, write_json
+from stores.paths import CONFIG_DIR
 
-BIBLE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bible.json")
+BIBLE_PATH = os.path.join(CONFIG_DIR, "bible.json")
 _LOCK = lock_for(BIBLE_PATH)
 
 

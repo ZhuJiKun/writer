@@ -1,3 +1,4 @@
+import difflib
 import json
 import urllib.error
 import urllib.request
@@ -5,18 +6,18 @@ import urllib.request
 from flask import Flask, jsonify, redirect, render_template, request, url_for
 from markupsafe import Markup, escape
 
-import bible_store as bst
-import chapters_store as hst
-import character_store as cst
-import char_llm as cl
-import config_store as cs
-import content_llm as cli
-import foreshadow_store as fst
-import llm_client as lc
-import memory_store as mst
-import outline_store as ost
-import project_store as ps
-import style_store as sst
+from stores import bible_store as bst
+from stores import chapters_store as hst
+from stores import character_store as cst
+from stores import config_store as cs
+from stores import foreshadow_store as fst
+from stores import memory_store as mst
+from stores import outline_store as ost
+from stores import project_store as ps
+from stores import style_store as sst
+from llm import character as cl
+from llm import client as lc
+from llm import content as cli
 import write_engine as we
 
 app = Flask(__name__)
@@ -96,11 +97,15 @@ def _chapter_rows():
             "status_label": hst.STATUS_LABELS.get(e_status, "") if e else ch.get("status", ""),
             "word_count": (e or {}).get("word_count") or ch.get("word_count") or 0,
             "review": review, "error": (e or {}).get("error", ""),
+            "scene_end": (e or {}).get("scene_end"),
+            "has_entry": bool(e),
             # 可勾选重新生成：有记录且处于 排队/失败/草稿；或大纲里原有的待生成章
             "regen_ok": (e and e_status in hst.REGENERABLE) or
                         (not e and ch.get("status") == ost.STATUS_TODO),
             "adopt_ok": bool(e and e_status == hst.ST_DRAFT),
             "read_ok": bool(e and e.get("content")),
+            # 已采纳章节的摘要已回写分层记忆，标题/概要锁定；其余阶段都允许在工作台改
+            "edit_ok": e_status != hst.ST_ADOPTED,
         })
     return rows
 
@@ -183,6 +188,7 @@ def chapter_confirm(bid):
         return redirect(url_for("chapter", err="批次不存在或已确认"))
     titles = [t.strip() for t in request.form.getlist("plan_title")]
     summaries = [s.strip() for s in request.form.getlist("plan_summary")]
+    note = request.form.get("note", "").strip()
     plan = [{"title": t, "summary": s} for t, s in zip(titles, summaries) if t and s]
     if not plan:
         return redirect(url_for("chapter", err="细纲不能为空（每章都需要标题与细纲）"))
@@ -200,9 +206,11 @@ def chapter_confirm(bid):
         chapter_ids = []
         for item in plan:
             ch = ost.add_chapter(vol["id"], item["title"], item["summary"], status=ost.STATUS_TODO)
-            hst.upsert_entry(hst.new_entry(ch["id"], batch_id=bid, min_words=batch.get("min_words", 1500)))
+            hst.upsert_entry(hst.new_entry(ch["id"], batch_id=bid,
+                                           min_words=batch.get("min_words", 1500), note=note))
             chapter_ids.append(ch["id"])
-        hst.update_batch(bid, plan=plan, chapter_ids=chapter_ids, vol_id=vol["id"], status="confirmed")
+        hst.update_batch(bid, plan=plan, chapter_ids=chapter_ids, vol_id=vol["id"],
+                         note=note, status="confirmed")
     except Exception as e:
         we.abort_task(tid, "细纲落盘失败：%s" % e)
         return redirect(url_for("chapter", err="细纲落盘失败：" + str(e)))
@@ -223,6 +231,87 @@ def _sorted_ids(ids):
     """按全局章号排序章节 id 列表（生成与采纳都按剧情顺序处理）；重复提交的 id 去重。"""
     order = {ch["id"]: no for _, ch, no in ost.iter_chapters()}
     return sorted((i for i in dict.fromkeys(ids) if i in order), key=lambda i: order[i])
+
+
+@app.route("/chapter/<cid>/meta", methods=["POST"])
+def chapter_meta_update(cid):
+    """工作台直接改章节标题/概要：未采纳的章节随时可改；已采纳的锁定（摘要已回写记忆）。"""
+    vol, ch, no = ost.find_chapter(cid)
+    if not ch:
+        return redirect(url_for("chapter", err="章节不存在"))
+    entry = hst.get_entry(cid)
+    if entry and entry.get("status") == hst.ST_ADOPTED:
+        return redirect(url_for("chapter", err="第 %d 章已采纳，标题/概要不可再修改" % no))
+    title = (request.form.get("title") or "").strip()
+    if not title:
+        return redirect(url_for("chapter", err="标题不能为空"))
+    summary = (request.form.get("summary") or "").strip()
+    ost.update_chapter(cid, title=title, summary=summary)
+    return redirect(url_for("chapter", msg="已更新第 %d 章的标题/概要" % no))
+
+
+@app.route("/chapter/<cid>/meta_llm", methods=["POST"])
+def chapter_meta_llm(cid):
+    """LLM 依据章节正文（+ 可选用户要求）生成标题/概要，先给确认页，不直接替换。"""
+    vol, ch, no = ost.find_chapter(cid)
+    if not ch:
+        return redirect(url_for("chapter", err="章节不存在"))
+    entry = hst.get_entry(cid)
+    if entry and entry.get("status") == hst.ST_ADOPTED:
+        return redirect(url_for("chapter", err="第 %d 章已采纳，标题/概要不可再修改" % no))
+    if not entry or not (entry.get("content") or "").strip():
+        return redirect(url_for("chapter", err="第 %d 章还没有正文，无法让 LLM 总结" % no))
+    requirement = (request.form.get("requirement") or "").strip()
+    try:
+        meta = cli.gen_chapter_meta(entry["content"], ch.get("title", ""),
+                                    ch.get("summary", ""), requirement)
+    except cli.LLMError as e:
+        return redirect(url_for("chapter", err="LLM 生成标题/概要失败：" + str(e)))
+    return render_template("chapter_meta_confirm.html", cid=cid, no=no,
+                           old_title=ch.get("title", ""), old_summary=ch.get("summary", ""),
+                           new_title=meta["title"], new_summary=meta["summary"],
+                           requirement=requirement)
+
+
+@app.route("/chapter/anchor/<cid>/save", methods=["POST"])
+def chapter_anchor_save(cid):
+    """手动修正章节场景锚点；三项全空等于清空锚点。"""
+    vol, ch, no = ost.find_chapter(cid)
+    if not ch:
+        return redirect(url_for("chapter", err="章节不存在"))
+    if not hst.get_entry(cid):
+        return redirect(url_for("chapter", err="第 %d 章还没有生成记录，无需设置锚点" % no))
+    time_v = (request.form.get("time") or "").strip()
+    place = (request.form.get("place") or "").strip()
+    present_raw = (request.form.get("present") or "").strip()
+    for sep in ("、", "；", ";"):
+        present_raw = present_raw.replace(sep, ",")
+    present = [p.strip() for p in present_raw.split(",") if p.strip()]
+    scene = {"time": time_v, "place": place, "present": present}
+    hst.update_scene_end(cid, scene if (time_v or place or present) else None)
+    return redirect(url_for("chapter", msg="已更新第 %d 章的场景锚点" % no
+                            if (time_v or place or present) else "已清空第 %d 章的场景锚点" % no))
+
+
+@app.route("/chapter/anchor/<cid>/extract", methods=["POST"])
+def chapter_anchor_extract(cid):
+    """对有正文的章节补抽场景锚点（旧章节没有锚点时人工触发，单次 LLM 调用）。"""
+    vol, ch, no = ost.find_chapter(cid)
+    if not ch:
+        return redirect(url_for("chapter", err="章节不存在"))
+    entry = hst.get_entry(cid)
+    if not entry or not (entry.get("content") or "").strip():
+        return redirect(url_for("chapter", err="第 %d 章还没有正文，无法抽取锚点" % no))
+    if not lc.llm_available():
+        return redirect(url_for("chapter", err="请先到「模型配置」页填写模型"))
+    try:
+        scene = cli.extract_scene_end(no, ch.get("title", ""), entry["content"])
+    except cli.LLMError as e:
+        return redirect(url_for("chapter", err="LLM 抽取锚点失败：" + str(e)))
+    hst.update_scene_end(cid, scene)
+    return redirect(url_for("chapter", msg="已抽取第 %d 章的场景锚点：%s｜%s"
+                            % (no, scene.get("time") or "（时间未标注）",
+                               scene.get("place") or "（地点未标注）")))
 
 
 @app.route("/chapter/regenerate", methods=["POST"])
@@ -325,7 +414,113 @@ def chapter_text(cid):
                            status_label=hst.STATUS_LABELS.get(entry.get("status"), ""),
                            review=(entry.get("review") or {}).get("final"),
                            history=(entry.get("review") or {}).get("history") or [],
-                           paragraphs=paragraphs, prev_cid=prev_cid, next_cid=next_cid)
+                           paragraphs=paragraphs, prev_cid=prev_cid, next_cid=next_cid,
+                           revise_draft=entry.get("revise") or None,
+                           llm_on=lc.llm_available(),
+                           msg=request.args.get("msg"), err=request.args.get("err"))
+
+
+@app.route("/chapter/text/<cid>/save", methods=["POST"])
+def chapter_text_save(cid):
+    """保存用户手动编辑的正文：以用户文本为准，同步重算字数。"""
+    entry = hst.get_entry(cid)
+    if not entry:
+        return redirect(url_for("chapter", err="章节不存在"))
+    content = (request.form.get("content") or "").strip()
+    if not content:
+        return redirect(url_for("chapter_text", cid=cid, err="正文不能为空"))
+    hst.update_content(cid, content, cli.count_words(content))
+    return redirect(url_for("chapter_text", cid=cid, msg="正文已保存"))
+
+
+@app.route("/chapter/text/<cid>/revise", methods=["POST"])
+def chapter_text_revise(cid):
+    """LLM 微调：当前正文 + 用户修改要求 → 修改稿，暂存后跳对比页（不走审校）。"""
+    entry = hst.get_entry(cid)
+    vol, ch, no = ost.find_chapter(cid)
+    if not entry or not entry.get("content") or not ch:
+        return redirect(url_for("chapter", err="该章节还没有正文"))
+    instruction = (request.form.get("instruction") or "").strip()
+    if not instruction:
+        return redirect(url_for("chapter_text", cid=cid, err="请先填写修改要求"))
+    try:
+        new_text = cli.revise_content(ch.get("title", ""), entry["content"], instruction)
+    except cli.LLMError as e:
+        return redirect(url_for("chapter_text", cid=cid, err="LLM 修改失败：" + str(e)))
+    hst.set_revise_draft(cid, instruction, new_text)
+    return redirect(url_for("chapter_text_compare", cid=cid))
+
+
+def _inline_diff(old, new):
+    """段内字符级 diff：相同部分原样，差异部分包 <mark>（old=红删除线 / new=绿）。
+    输入先 escape，输出可直接 |safe 渲染。"""
+    sm = difflib.SequenceMatcher(None, old, new, autojunk=False)
+    o_parts, n_parts = [], []
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        o_seg, n_seg = str(escape(old[i1:i2])), str(escape(new[j1:j2]))
+        if tag == "equal":
+            o_parts.append(o_seg)
+            n_parts.append(n_seg)
+        else:
+            if tag in ("delete", "replace"):
+                o_parts.append(f'<mark class="diff-del">{o_seg}</mark>')
+            if tag in ("insert", "replace"):
+                n_parts.append(f'<mark class="diff-ins">{n_seg}</mark>')
+    return "".join(o_parts), "".join(n_parts)
+
+
+def _diff_rows(old_text, new_text):
+    """段落级 diff：相同段落折叠成一行提示；差异段落左右对齐，等长 replace 块做段内字符高亮。"""
+    old_lines = [p.strip() for p in old_text.split("\n") if p.strip()]
+    new_lines = [p.strip() for p in new_text.split("\n") if p.strip()]
+    sm = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
+    rows = []
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            rows.append({"kind": "same", "count": i2 - i1})
+            continue
+        o_ls, n_ls = old_lines[i1:i2], new_lines[j1:j2]
+        if tag == "replace" and len(o_ls) == len(n_ls):
+            for o, n in zip(o_ls, n_ls):
+                o_h, n_h = _inline_diff(o, n)
+                rows.append({"kind": "mod", "old": o_h, "new": n_h})
+            continue
+        for ln in o_ls:
+            rows.append({"kind": "del", "old": str(escape(ln)), "new": ""})
+        for ln in n_ls:
+            rows.append({"kind": "ins", "old": "", "new": str(escape(ln))})
+    return rows
+
+
+@app.route("/chapter/text/<cid>/compare")
+def chapter_text_compare(cid):
+    """原文 / LLM 修改稿 差异对比（相同段落折叠），用户二选一，另一份删除。"""
+    entry = hst.get_entry(cid)
+    vol, ch, no = ost.find_chapter(cid)
+    draft = (entry or {}).get("revise") or {}
+    if not entry or not ch or not (draft.get("text") or "").strip():
+        return redirect(url_for("chapter_text", cid=cid, err="没有待处理的修改稿"))
+    return render_template("chapter_compare.html", entry=entry, no=no,
+                           title=ch.get("title", ""), draft=draft,
+                           rows=_diff_rows(entry["content"], draft["text"]),
+                           new_words=cli.count_words(draft["text"]))
+
+
+@app.route("/chapter/text/<cid>/revise/apply", methods=["POST"])
+def chapter_text_revise_apply(cid):
+    """对比页二选一：采用修改稿替换原文，或保留原文丢弃修改稿。"""
+    entry = hst.get_entry(cid)
+    if not entry:
+        return redirect(url_for("chapter", err="章节不存在"))
+    if request.form.get("decision") == "new":
+        text = ((entry.get("revise") or {}).get("text") or "").strip()
+        if not text:
+            return redirect(url_for("chapter_text", cid=cid, err="修改稿已不存在"))
+        hst.apply_revise_draft(cid, cli.count_words(text))
+        return redirect(url_for("chapter_text", cid=cid,
+                                msg="已采用 LLM 修改稿替换原文（未走审校）"))
+    hst.clear_revise_draft(cid)
+    return redirect(url_for("chapter_text", cid=cid, msg="已保留原文，修改稿已删除"))
 
 
 # ---------- 审校循环模块 ----------
@@ -1029,28 +1224,49 @@ def style_sample_delete(sid):
 
 
 def _test_connection(slot_cfg):
-    """发一条 max_tokens=1 的 chat 请求验证配置可用，返回 (ok, detail)。"""
+    """发一条 max_tokens=1 的 chat 请求验证配置可用，返回 (ok, detail)。按 protocol 分发。"""
     base_url = (slot_cfg.get("base_url") or "").rstrip("/")
     api_key = slot_cfg.get("api_key") or ""
     model = slot_cfg.get("model") or ""
     if not (base_url and api_key and model):
         return False, "配置不完整：base_url / api_key / model 均需填写"
-    payload = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": "hi"}],
-        "max_tokens": 1,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        base_url + "/chat/completions",
-        data=payload,
-        headers={"Content-Type": "application/json", "Authorization": "Bearer " + api_key},
-        method="POST",
-    )
+    if slot_cfg.get("protocol") == "anthropic":
+        payload = json.dumps({
+            "model": model,
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "hi"}],
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            lc._anthropic_url(base_url),
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            method="POST",
+        )
+    else:
+        payload = json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 1,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            base_url + "/chat/completions",
+            data=payload,
+            headers={"Content-Type": "application/json", "Authorization": "Bearer " + api_key},
+            method="POST",
+        )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-            got = body.get("model") or model
-            return True, f"连接成功，模型响应正常（{got}）"
+            raw = resp.read().decode("utf-8")
+            is_sse = "text/event-stream" in (resp.headers.get("Content-Type") or "")
+        if is_sse or raw.lstrip().startswith("event:"):
+            return True, f"连接成功，模型以 SSE 流式响应（{model}）"
+        body = json.loads(raw)
+        got = body.get("model") or model
+        return True, f"连接成功，模型响应正常（{got}）"
     except urllib.error.HTTPError as e:
         try:
             err = json.loads(e.read().decode("utf-8"))
@@ -1062,17 +1278,29 @@ def _test_connection(slot_cfg):
         return False, f"请求失败：{e}"
 
 
-def _list_models(base_url, api_key):
-    """GET {base_url}/models 拉取该 key 可用的模型列表，返回 (ok, ids 或错误信息)。"""
+def _list_models(base_url, api_key, protocol="openai"):
+    """GET 模型列表接口拉取该 key 可用的模型，返回 (ok, ids 或错误信息)。按 protocol 分发。"""
     if not (base_url and api_key):
         return False, "需要 base_url 和 api_key 才能拉取模型列表"
-    req = urllib.request.Request(
-        base_url.rstrip("/") + "/models",
-        headers={"Authorization": "Bearer " + api_key},
-    )
+    if protocol == "anthropic":
+        base = base_url.rstrip("/")
+        url = base + "/models" if base.endswith("/v1") else base + "/v1/models"
+        req = urllib.request.Request(
+            url,
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+        )
+    else:
+        req = urllib.request.Request(
+            base_url.rstrip("/") + "/models",
+            headers={"Authorization": "Bearer " + api_key},
+        )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+            raw = resp.read().decode("utf-8")
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError:
+            return False, "模型列表接口返回了非 JSON 内容（该转发端点可能未实现 /models，请手填模型名）"
         ids = sorted(m["id"] for m in body.get("data", []) if m.get("id"))
         if not ids:
             return False, "接口返回成功但模型列表为空"
@@ -1095,6 +1323,7 @@ def _form_or_saved(cfg, slot):
         "base_url": request.form.get("base_url", "").strip() or eff.get("base_url", ""),
         "api_key": request.form.get("api_key", "").strip() or eff.get("api_key", ""),
         "model": request.form.get("model", "").strip() or eff.get("model", ""),
+        "protocol": request.form.get("protocol", "").strip() or eff.get("protocol", "openai"),
     }
 
 
@@ -1120,6 +1349,7 @@ def settings_models_save():
             "base_url": request.form.get(f"{slot}__base_url", "").strip(),
             "api_key": request.form.get(f"{slot}__api_key", "").strip(),
             "model": request.form.get(f"{slot}__model", "").strip(),
+            "protocol": request.form.get(f"{slot}__protocol", "openai"),
             "inherit": request.form.get(f"{slot}__inherit") == "1",
         }
         cs.save_slot(slot, data)
@@ -1143,7 +1373,7 @@ def settings_models_fetch():
         return jsonify(ok=False, detail="未知槽位"), 400
     cfg = cs.load_config()
     form = _form_or_saved(cfg, slot)
-    ok, result = _list_models(form["base_url"], form["api_key"])
+    ok, result = _list_models(form["base_url"], form["api_key"], form["protocol"])
     if ok:
         return jsonify(ok=True, models=result, detail=f"拉到 {len(result)} 个可用模型")
     return jsonify(ok=False, detail=result)
@@ -1200,10 +1430,8 @@ def setup_reset():
 
 if __name__ == "__main__":
     import os
-    import sys
 
     # 5000 被 macOS 隔空播放接收器(ControlCenter)占用，默认用 5001，可用 WRITER_PORT 覆盖
     port = int(os.environ.get("WRITER_PORT", "5001"))
-    # nohup 后台运行时 stdin 不是终端，Werkzeug 自动重载会因 termios 崩溃，此时关闭 reloader
-    use_reloader = sys.stdin.isatty()
-    app.run(debug=True, port=port, use_reloader=use_reloader)
+    # debug 关闭：无自动重载，改代码后需重启进程生效
+    app.run(debug=False, port=port)

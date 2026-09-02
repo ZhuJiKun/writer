@@ -5,8 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}AI 小说写作系统{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script>
+    // 页面渲染前恢复侧栏折叠状态，避免闪烁
+    try {
+      if (localStorage.getItem('sidebar_collapsed') === '1') {
+        document.documentElement.classList.add('sidebar-collapsed');
+      }
+    } catch (e) {}
+  </script>
 </head>
 <body>
+  <button id="sidebar-toggle" type="button" title="收起 / 展开导航" aria-label="收起 / 展开导航">☰</button>
   <div class="sidebar">
     <div class="logo">📖 AI 小说写作系统</div>
     <nav>
@@ -33,5 +42,14 @@
   <div class="content">
     {% block content %}{% endblock %}
   </div>
+  <script>
+    (function () {
+      var btn = document.getElementById('sidebar-toggle');
+      btn.addEventListener('click', function () {
+        var collapsed = document.documentElement.classList.toggle('sidebar-collapsed');
+        try { localStorage.setItem('sidebar_collapsed', collapsed ? '1' : '0'); } catch (e) {}
+      });
+    })();
+  </script>
 </body>
 </html>

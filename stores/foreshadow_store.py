@@ -4,9 +4,10 @@ import os
 import re
 from datetime import datetime
 
-from json_store import lock_for, read_json, synchronized, write_json
+from stores.json_store import lock_for, read_json, synchronized, write_json
+from stores.paths import CONFIG_DIR
 
-FORESHADOW_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "foreshadow.json")
+FORESHADOW_PATH = os.path.join(CONFIG_DIR, "foreshadow.json")
 _LOCK = lock_for(FORESHADOW_PATH)
 
 STATUSES = ["待回收", "已回收", "长线"]

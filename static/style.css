@@ -35,9 +35,40 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
+  transition: margin-left 0.25s ease;
 }
+html.sidebar-collapsed .sidebar { margin-left: -216px; }
+
+/* 抽屉开关：悬浮固定，展开时融入侧栏深色，收起时变为浅色卡片 */
+#sidebar-toggle {
+  position: fixed;
+  top: 18px;
+  left: 16px;
+  z-index: 100;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: #232939;
+  color: #aab2c5;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+#sidebar-toggle:hover { background: #2c3447; color: #fff; }
+html.sidebar-collapsed #sidebar-toggle {
+  background: var(--card);
+  color: var(--text);
+  border-color: var(--border);
+  box-shadow: var(--shadow);
+}
+
 .sidebar .logo {
-  font-weight: 700; color: #fff; padding: 0 10px 18px; font-size: 15px;
+  font-weight: 700; color: #fff; padding: 2px 10px 18px 40px; font-size: 15px;
   letter-spacing: 0.3px;
 }
 .sidebar nav { flex: 1; }
@@ -62,7 +93,9 @@ body {
 .sidebar-footer { padding: 14px 12px 0; font-size: 11px; color: #667085; }
 
 /* ---------- 主区域 ---------- */
-.content { flex: 1; padding: 32px 36px 80px; max-width: 1080px; }
+.content { flex: 1; padding: 32px 36px 80px; max-width: 1080px; transition: padding-left 0.25s ease; }
+/* 收起侧栏后给悬浮按钮让位 */
+html.sidebar-collapsed .content { padding-left: 64px; }
 
 .page-head { margin-bottom: 20px; }
 h1 { font-size: 21px; font-weight: 650; margin-bottom: 4px; letter-spacing: 0.2px; }
@@ -362,3 +395,79 @@ ul.plain li:last-child { border-bottom: none; }
   width: 54px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px;
   font-size: 13px; font-family: inherit; text-align: center;
 }
+
+/* ---------- 章节 LLM 修改：阅读页提示条 + 对比页 ---------- */
+.revise-banner {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  border-left: 3px solid var(--accent); font-size: 14px;
+}
+.diff-table {
+  max-height: 68vh; overflow-y: auto;
+  border-top: 1px solid var(--border); margin-top: 10px;
+}
+.diff-row { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--border); }
+.diff-row .diff-cell:first-child { border-right: 1px solid var(--border); }
+.diff-head { position: sticky; top: 0; z-index: 1; background: #f8fafc; }
+.diff-head .diff-cell { font-weight: 600; font-size: 13.5px; padding: 9px 16px; }
+.diff-cell { padding: 12px 16px; line-height: 2; font-size: 14px; word-break: break-word; }
+.diff-same { grid-template-columns: 1fr; }
+.diff-same .diff-cell {
+  text-align: center; color: var(--muted); background: #f8fafc;
+  font-size: 12.5px; padding: 6px 16px; letter-spacing: 1px;
+}
+.diff-cell.del-old { background: #fef2f2; }
+.diff-cell.del-new { background: #fafafa; }
+.diff-cell.ins-old { background: #fafafa; }
+.diff-cell.ins-new { background: #f0fdf4; }
+.diff-cell.mod-old { background: #fff7f7; }
+.diff-cell.mod-new { background: #f6fdf9; }
+mark.diff-del {
+  background: #fecaca; color: #991b1b; text-decoration: line-through;
+  border-radius: 3px; padding: 0 2px;
+}
+mark.diff-ins {
+  background: #bbf7d0; color: #166534; text-decoration: none;
+  border-radius: 3px; padding: 0 2px;
+}
+.diff-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 14px; }
+
+/* ---------- 工作台章节标题/概要行内编辑 ---------- */
+.ch-meta-edit { display: inline-block; margin-left: 6px; vertical-align: middle; }
+.ch-meta-edit .meta-edit-btn { font-size: 13px; opacity: 0.55; }
+.ch-meta-edit .meta-edit-btn:hover { opacity: 1; }
+.ch-meta-edit .edit-pop label { display: block; margin-bottom: -4px; }
+/* ---------- 工作台章节列表：行内对齐 / 审校列 / 行悬浮 ---------- */
+.chapter-table td { vertical-align: top; line-height: 1.5; }
+.chapter-table td.cell-center { vertical-align: top; padding-top: 11px; }
+.chapter-table tr:hover td { background: #fafbfd; }
+.chapter-table .review-cell .badge { display: inline-block; }
+.chapter-table .review-issues { display: block; margin-top: 4px; }
+
+/* ---------- 章节概要：三行截断 + 悬浮展开 ---------- */
+.sum-clamp { position: relative; }
+.sum-text { margin: 2px 0; display: -webkit-box; -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical; overflow: hidden; }
+.sum-pop { display: none; position: absolute; z-index: 40; top: 100%; left: 0;
+  width: 440px; max-width: 72vw; max-height: 320px; overflow: auto;
+  background: #fff; border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(27, 31, 36, .14); padding: 10px 14px;
+  font-size: 12px; line-height: 1.8; color: var(--text); white-space: pre-wrap; }
+.sum-clamp:hover .sum-pop { display: block; }
+.sum-clamp.sum-no-more .sum-pop { display: none; }
+
+/* ---------- 工作台章节场景锚点 ---------- */
+.anchor-edit { display: block; margin-left: 0; }
+.anchor-box { display: inline-block; max-width: 168px; background: #f7f8fa;
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 9px;
+  font-size: 12px; line-height: 1.65; transition: box-shadow .15s, border-color .15s; }
+.anchor-edit summary:hover .anchor-box { border-color: #c9d1d9; box-shadow: 0 1px 4px rgba(27, 31, 36, .08); }
+.anchor-box .a-line { display: block; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.anchor-box .a-time { color: var(--text); font-weight: 500; }
+.anchor-add { display: inline-block; font-size: 12px; color: var(--muted);
+  border: 1px dashed var(--border); border-radius: 6px; padding: 4px 10px; }
+.anchor-edit summary:hover .anchor-add { color: var(--text); border-color: #c9d1d9; background: #f7f8fa; }
+.anchor-edit .edit-pop label { display: block; margin-bottom: -4px; }
+
+/* ---------- LLM 标题/概要建议确认页 ---------- */
+.diff-new-text { color: #166534; }

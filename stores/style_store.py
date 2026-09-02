@@ -4,9 +4,10 @@ import os
 import uuid
 from datetime import datetime
 
-from json_store import lock_for, read_json, synchronized, write_json
+from stores.json_store import lock_for, read_json, synchronized, write_json
+from stores.paths import CONFIG_DIR
 
-STYLE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "style.json")
+STYLE_PATH = os.path.join(CONFIG_DIR, "style.json")
 _LOCK = lock_for(STYLE_PATH)
 
 CONSTRAINT_KEYS = ["person", "pov", "tense", "paragraph", "dialogue_ratio"]

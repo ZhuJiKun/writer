@@ -6,10 +6,11 @@ import time
 import uuid
 from datetime import datetime
 
-from json_store import lock_for, read_json, synchronized, write_json
+from stores.json_store import lock_for, read_json, synchronized, write_json
+from stores.paths import CONFIG_DIR
 
-CHARS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "characters.json")
-BCK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "characters_bck")
+CHARS_PATH = os.path.join(CONFIG_DIR, "characters.json")
+BCK_DIR = os.path.join(CONFIG_DIR, "characters_bck")
 BCK_KEEP_DAYS = 30
 BCK_MIN_INTERVAL = 120  # 秒：备份限流，避免采纳流水线/对话草稿等高频保存产生大量副本
 _last_backup_at = 0.0
