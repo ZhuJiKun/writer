@@ -177,7 +177,8 @@ def p_plan_chapters(count, start_no, vol_label, ctx):
         "你是网络小说策划。根据作品上下文和用户对这批章节的内容构想，规划接下来 %d 章的细纲"
         "（从第%d章起，归入「%s」）。\n"
         "要求：承接已有剧情与角色状态，自然呼应待回收伏笔，逐章推进用户构想的情节并有节奏地拆分冲突；"
-        "每章 title 2~8 个字、有钩子；summary 3~4 句，写清关键事件、出场人物、状态/关系变化，可直接指导正文写作；"
+        "每章 title 2~8 个字、简洁贴切；summary 3~4 句，写清关键事件、出场人物、状态/关系变化，可直接指导正文写作；"
+        "章节结尾随情节自然收束即可，不要为了追悬念每章都强行留钩子，确有需要时留得含蓄、与后续细纲呼应；"
         "不要与已有章节重复。\n"
         "只输出 JSON：{\"chapters\":[{\"title\":\"\",\"summary\":\"\"}]}，必须正好 %d 章。\n\n"
         "【作品上下文】\n%s"
@@ -191,14 +192,16 @@ def p_plan_chapters_retry(last, count):
             % (last, count, count))
 
 
-def p_generate_chapter(no, title, min_words, ctx_text):
+def p_generate_chapter(no, title, min_words, max_words, ctx_text):
     return (
         "你是网络小说作家，正在创作第%d章《%s》。\n"
-        "要求：严格遵守上下文里的文风规范与 POV 约束；正文不少于 %d 字（汉字，不含标点也不宜太少，宁多勿少）；"
+        "要求：严格遵守上下文里的文风规范与 POV 约束；正文控制在 %d 至 %d 字（汉字计），"
+        "不得少于 %d 字，也不要超过 %d 字，篇幅不够就扩写细节与对话，快超了就收束支线；"
         "情节以本章细纲为纲，可合理发挥细节、对话与氛围；段落宜短，对话用「」；"
+        "章节结尾随情节自然收束即可，不要每章都强行制造悬念或伏笔，确有需要时留得含蓄一些；"
         "只输出章节正文，不要输出标题、章节号、大纲或任何说明文字。\n\n"
         "【作品上下文】\n%s"
-        % (no, title, min_words, ctx_text)
+        % (no, title, min_words, max_words, min_words, max_words, ctx_text)
     )
 
 
@@ -213,12 +216,12 @@ def p_generate_chapter_user(note):
     return user
 
 
-def p_critic_review(no, title, actual_words, min_words, ctx_brief):
+def p_critic_review(no, title, actual_words, min_words, max_words, ctx_brief):
     return (
         "你是严苛的小说审校编辑。审校第%d章《%s》的初稿，逐项检查：\n"
         "1 一致性：与角色状态、世界观设定、前文摘要是否冲突；2 逻辑与衔接：因果、时间线、与上一章衔接；\n"
         "3 细纲覆盖：本章细纲要求的情节是否都写到；4 文风与 POV：是否符合文风规范；\n"
-        "5 伏笔：该呼应的伏笔是否呼应；6 字数：实际约 %d 字，要求不少于 %d 字；\n"
+        "5 伏笔：该呼应的伏笔是否呼应；6 字数：实际约 %d 字，要求在 %d 至 %d 字之间；\n"
         "7 场景连续性：本章开场的时间/地点/在场人物与上下文【上章结尾·场景锚点】是否矛盾"
         "（开场时间不得倒退；时间/地点跳跃必须显式交代；不在场人物不得无交代地出现或开口；"
         "上下文没有锚点块则跳过本项）。\n"
@@ -228,7 +231,7 @@ def p_critic_review(no, title, actual_words, min_words, ctx_brief):
         "只输出 JSON：{\"pass\":true或false,\"score\":1到10的整数,\"issues\":[{\"type\":\"检查项\",\"detail\":\"问题描述\"}],"
         "\"scene_end\":{\"time\":\"\",\"place\":\"\",\"present\":[\"\"]}}\n\n"
         "【作品上下文】\n%s"
-        % (no, title, actual_words, min_words, ctx_brief)
+        % (no, title, actual_words, min_words, max_words, ctx_brief)
     )
 
 
@@ -237,19 +240,19 @@ def p_revise_note_block(note):
     return "\n\n【用户补充要求】\n%s\n（重写后仍必须满足以上补充要求。）" % note
 
 
-def p_revise_chapter(no, title, min_words, issue_lines, ctx_text, note_block):
+def p_revise_chapter(no, title, min_words, max_words, issue_lines, ctx_text, note_block):
     return (
         "你是网络小说作家，正在根据审校意见重写第%d章《%s》。\n"
         "要求：输出完整的重写后正文（不是修改说明、不是局部片段）；解决下面每一条审校问题；"
-        "不少于 %d 字；保持文风规范与 POV 约束；只输出正文。\n\n"
+        "正文控制在 %d 至 %d 字（汉字计）；保持文风规范与 POV 约束；只输出正文。\n\n"
         "【审校问题清单】\n%s\n\n【作品上下文】\n%s%s"
-        % (no, title, min_words, issue_lines, ctx_text, note_block)
+        % (no, title, min_words, max_words, issue_lines, ctx_text, note_block)
     )
 
 
 P_GEN_CHAPTER_META = (
     "你是网络小说编辑。阅读下面的章节正文，为它拟定章节标题和内容概要。\n"
-    "要求：标题 2~8 个字、有钩子、贴合正文实际内容；概要 3~4 句，写清关键事件、出场人物、"
+    "要求：标题 2~8 个字、简洁贴切、贴合正文实际内容；概要 3~4 句，写清关键事件、出场人物、"
     "状态/关系变化，可直接作为写作细纲使用；不要虚构正文中没有的情节；"
     "不要沿用与正文脱节的旧标题/旧概要。\n"
     "只输出 JSON：{\"title\":\"\",\"summary\":\"\"}"
@@ -299,3 +302,29 @@ def p_extract_scene_end(no, title):
         "只输出 JSON：{\"time\":\"\",\"place\":\"\",\"present\":[\"\"]}"
         % (no, title)
     )
+
+
+# ──────────────────────────── AI 聊天助手 ────────────────────────────
+
+ASSISTANT_SYS = (
+    "你是用户的中文小说写作助手，驻扎在写作系统的右下角聊天面板里。"
+    "擅长：润色句子与段落、推敲词语、起人名地名、讨论情节与人物、解答写作相关问题。\n"
+    "要求：回答简洁直接，多给可直接采用的成品（改写后的句子、候选词列表等），少讲空泛理论；"
+    "用户没让你长篇大论时就短答；始终用中文回答。"
+)
+
+
+def p_assistant_context(project):
+    """拼一行轻量作品上下文注入 system prompt；档案为空时返回空串。"""
+    if not project:
+        return ""
+    parts = []
+    if project.get("title"):
+        parts.append("书名《%s》" % project["title"])
+    if project.get("genre"):
+        parts.append("题材：%s" % project["genre"])
+    if project.get("style_prompt"):
+        parts.append("文风：%s" % project["style_prompt"][:100])
+    if not parts:
+        return ""
+    return "\n\n【用户当前作品】%s。回答与作品相关的问题时贴合这些设定。" % "；".join(parts)

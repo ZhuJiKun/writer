@@ -50,19 +50,20 @@
 <div class="card" id="plan">
   <h2>待确认细纲方案 <span class="badge yellow">核对后可改，确认即开写</span></h2>
   <p class="kv"><b>内容构想</b>{{ pending.brief }}</p>
-  <p class="kv"><b>归入</b>{{ pending_vol_label }}　<b>起始</b>第 {{ pending_start_no }} 章　<b>每章最少</b>{{ pending.min_words }} 字</p>
+  <p class="kv"><b>归入</b>{{ pending_vol_label }}　<b>起始</b>第 {{ pending_start_no }} 章　<b>每章字数</b>{{ pending.min_words }}–{{ pending.max_words or pending.min_words * 2 }} 字</p>
   <form method="post" action="{{ url_for('chapter_confirm', bid=pending.id) }}">
     <table class="mt">
-      <tr><th style="width:56px">章号</th><th style="width:180px">标题</th><th>细纲</th></tr>
+      <tr><th style="width:48px" class="cell-center">章号</th><th style="width:160px">标题</th><th>细纲</th><th style="width:180px">本章补充（可选）</th></tr>
       {% for item in pending.plan %}
       <tr>
-        <td class="cell-center">第 {{ pending_start_no + loop.index0 }} 章</td>
-        <td><input type="text" name="plan_title" value="{{ item.title }}" required></td>
-        <td><textarea name="plan_summary" rows="2" required>{{ item.summary }}</textarea></td>
+        <td class="cell-center">{{ pending_start_no + loop.index0 }}</td>
+        <td class="cell-middle"><input type="text" name="plan_title" value="{{ item.title }}" required></td>
+        <td><textarea name="plan_summary" rows="4" required>{{ item.summary }}</textarea></td>
+        <td><textarea name="plan_note" rows="4" placeholder="本章专属要求，留空则不传"></textarea></td>
       </tr>
       {% endfor %}
     </table>
-    <p class="kv mt"><b>补充要求</b><span class="muted">（可选，对本批每一章生效，会随细纲一并传给 LLM）</span></p>
+    <p class="kv mt"><b>补充要求</b><span class="muted">（可选，对本批每一章生效，会随细纲一并传给 LLM；每行「本章补充」只作用于对应章节）</span></p>
     <textarea name="note" rows="2" style="width:100%"
               placeholder="例如：每章 2000 字以上；对话多一些、节奏轻快；这几章重点刻画女主的反差感……"></textarea>
     <div class="action-bar mt">
@@ -88,9 +89,12 @@
         <label>章数（≤{{ max_batch }}）</label>
         <input type="number" name="count" value="5" min="1" max="{{ max_batch }}">
       </div>
-      <div class="field-row">
-        <label>每章最少字数</label>
-        <input type="number" name="min_words" value="1500" min="200" step="100">
+      <div class="field-row" style="grid-template-columns:110px 140px auto 140px 1fr">
+        <label>每章字数区间</label>
+        <input type="number" name="min_words" value="1500" min="200" step="100" title="每章最少字数">
+        <span class="muted">至</span>
+        <input type="number" name="max_words" value="3000" min="200" step="100" title="每章最多字数">
+        <span></span>
       </div>
       <div class="field-row">
         <label>归入卷</label>
@@ -114,8 +118,8 @@
 </div>
 
 <div class="card">
-  <h2>章节列表 <span class="badge gray">{{ rows|length }} 章</span></h2>
-  {% if not rows %}
+  <h2>章节列表 <span class="badge gray">{{ total }} 章</span></h2>
+  {% if not total %}
   <p class="muted">大纲里还没有章节。先在上方规划一批，或到「章节大纲」页手动添加。</p>
   {% else %}
   <form method="post" id="chapter-form">
@@ -134,7 +138,7 @@
         </td>
         <td class="cell-center">{{ r.no }}</td>
         <td class="muted">{{ r.vol }}</td>
-        <td>
+        <td class="chapter-col">
           <b>{{ r.title }}</b>
           {% if r.edit_ok %}
           <details class="vol-edit ch-meta-edit">
@@ -213,7 +217,6 @@
         <td class="review-cell">
           {% if r.review %}
           <span class="badge {{ 'green' if r.review.pass else 'red' }}">{{ r.review.score }} 分</span>
-          <span class="muted review-issues">{{ r.review.issues|length }} 问题</span>
           {% else %}<span class="muted">—</span>{% endif %}
         </td>
         <td class="cell-center">
@@ -224,7 +227,7 @@
       {% endfor %}
     </table>
     <div class="field-row mt">
-      <label>重新生成附加要求（可选）</label>
+      <label>重新生成附加要求</label>
       <input type="text" name="note" placeholder="例如：加强冲突，减少内心独白">
     </div>
     <div class="action-bar mt">
@@ -234,6 +237,35 @@
       <span class="inline-status">勾选「排队 / 失败 / 草稿」可重新生成；勾选「草稿」可采纳</span>
     </div>
   </form>
+  <div class="pager">
+    {% if pages > 1 %}
+    {% if page > 1 %}<a class="btn-inline" href="{{ url_for('chapter') }}?page={{ page - 1 }}&size={{ size }}">← 上一页</a>{% endif %}
+    {% set ns = namespace(prev=0) %}
+    {% for p in range(1, pages + 1) %}
+      {% if p == 1 or p == pages or (p >= page - 2 and p <= page + 2) %}
+        {% if ns.prev and p > ns.prev + 1 %}<span class="muted">…</span>{% endif %}
+        {% if p == page %}<span class="pg cur">{{ p }}</span>
+        {% else %}<a class="pg" href="{{ url_for('chapter') }}?page={{ p }}&size={{ size }}">{{ p }}</a>{% endif %}
+        {% set ns.prev = p %}
+      {% endif %}
+    {% endfor %}
+    {% if page < pages %}<a class="btn-inline" href="{{ url_for('chapter') }}?page={{ page + 1 }}&size={{ size }}">下一页 →</a>{% endif %}
+    <form class="pager-jump" method="get" action="{{ url_for('chapter') }}">
+      <input type="hidden" name="size" value="{{ size }}">
+      跳至 <input type="number" name="page" min="1" max="{{ pages }}" value="{{ page }}"> 页
+      <button class="btn-inline" type="submit">确定</button>
+    </form>
+    {% endif %}
+    <span class="muted">共 {{ total }} 章</span>
+    <form class="pager-jump" method="get" action="{{ url_for('chapter') }}">
+      <input type="hidden" name="page" value="1">
+      每页
+      <select name="size" onchange="this.form.submit()">
+        {% for s in page_sizes %}<option value="{{ s }}" {{ 'selected' if s == size }}>{{ s }}</option>{% endfor %}
+      </select>
+      章
+    </form>
+  </div>
   {# 每章的标题/概要编辑表单：表格在 #chapter-form 内不能嵌套表单，故放外部用 form 属性关联 #}
   {% for r in rows %}{% if r.edit_ok %}
   <form id="meta-{{ r.cid }}" method="post" action="{{ url_for('chapter_meta_update', cid=r.cid) }}"></form>

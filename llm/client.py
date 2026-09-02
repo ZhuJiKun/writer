@@ -251,6 +251,117 @@ def chat(messages, slot="generation"):
     return _call_llm(messages, slot=slot)
 
 
+def chat_stream(messages, slot="chat"):
+    """流式调指定槽位模型：生成器逐段 yield 文本增量；失败抛 LLMError。
+
+    某些转发网关会无视 stream=true 返回完整 JSON，此时一次性 yield 全部正文。
+    """
+    cfg = cs.load_config()
+    gen = cs.effective_slot(cfg, slot if slot in cs.SLOTS else "generation")
+    if gen.get("protocol") == "anthropic":
+        yield from _stream_anthropic(messages, gen)
+    else:
+        yield from _stream_openai(messages, gen)
+
+
+def _open_stream(req):
+    """打开流式请求，返回响应对象；HTTP/网络错误统一抛 LLMError。"""
+    try:
+        return urllib.request.urlopen(req, timeout=300)
+    except urllib.error.HTTPError as e:
+        try:
+            err = json.loads(e.read().decode("utf-8"))
+            msg = err.get("error", {}).get("message") or str(err)
+        except Exception:
+            msg = e.reason
+        raise LLMError(f"HTTP {e.code}：{msg}")
+    except Exception as e:
+        raise LLMError(f"请求失败：{e}")
+
+
+def _iter_sse_data(resp):
+    """逐行迭代 SSE 流的 data 载荷（跳过空行与 [DONE]）。"""
+    for raw_line in resp:
+        line = raw_line.decode("utf-8", "replace").strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if data and data != "[DONE]":
+            yield data
+
+
+def _stream_openai(messages, gen):
+    payload = json.dumps({
+        "model": gen["model"],
+        "messages": messages,
+        "stream": True,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        gen["base_url"].rstrip("/") + "/chat/completions",
+        data=payload,
+        headers={"Content-Type": "application/json", "Authorization": "Bearer " + gen["api_key"]},
+        method="POST",
+    )
+    with _open_stream(req) as resp:
+        # 网关无视 stream=true 时兜底：按普通 JSON 一次性返回
+        if "text/event-stream" not in (resp.headers.get("Content-Type") or ""):
+            body = json.loads(resp.read().decode("utf-8"))
+            yield body["choices"][0]["message"]["content"]
+            return
+        for data in _iter_sse_data(resp):
+            try:
+                evt = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            for choice in evt.get("choices", []):
+                delta = (choice.get("delta") or {}).get("content")
+                if delta:
+                    yield delta
+
+
+def _stream_anthropic(messages, gen):
+    system_parts = [str(m.get("content", "")) for m in messages if m.get("role") == "system"]
+    turns = [{"role": m["role"], "content": str(m.get("content", ""))}
+             for m in messages if m.get("role") in ("user", "assistant")]
+    payload = {
+        "model": gen["model"],
+        "max_tokens": 8192,
+        "messages": turns,
+        "stream": True,
+    }
+    if system_parts:
+        payload["system"] = "\n\n".join(system_parts)
+    req = urllib.request.Request(
+        _anthropic_url(gen["base_url"]),
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": gen["api_key"],
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST",
+    )
+    with _open_stream(req) as resp:
+        if "text/event-stream" not in (resp.headers.get("Content-Type") or ""):
+            body = json.loads(resp.read().decode("utf-8"))
+            yield "".join(b.get("text", "") for b in body.get("content", [])
+                          if isinstance(b, dict) and b.get("type") == "text")
+            return
+        for data in _iter_sse_data(resp):
+            try:
+                evt = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            etype = evt.get("type")
+            if etype == "content_block_delta":
+                delta = evt.get("delta") or {}
+                if delta.get("type") == "text_delta":
+                    yield delta.get("text", "")
+            elif etype == "error":
+                err = evt.get("error") or {}
+                raise LLMError("流式响应错误：%s" % (err.get("message") or evt))
+
+
 def extract_json(content):
     """从模型输出里容错提取 JSON 对象，失败返回 None。
     用 JSONDecoder.raw_decode 从首个 '{' 起解码（正确处理嵌套），

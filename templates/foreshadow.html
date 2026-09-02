@@ -1,5 +1,30 @@
 {% extends "base.html" %}
 {% block title %}伏笔追踪{% endblock %}
+
+{% macro pager(page, pages, total, status_filter) %}
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn-inline" href="{{ url_for('foreshadow', page=page - 1, status=status_filter) }}">← 上一页</a>{% endif %}
+  {% set ns = namespace(prev=0) %}
+  {% for p in range(1, pages + 1) %}
+    {% if p == 1 or p == pages or (p >= page - 2 and p <= page + 2) %}
+      {% if ns.prev and p > ns.prev + 1 %}<span class="muted">…</span>{% endif %}
+      {% if p == page %}<span class="pg cur">{{ p }}</span>
+      {% else %}<a class="pg" href="{{ url_for('foreshadow', page=p, status=status_filter) }}">{{ p }}</a>{% endif %}
+      {% set ns.prev = p %}
+    {% endif %}
+  {% endfor %}
+  {% if page < pages %}<a class="btn-inline" href="{{ url_for('foreshadow', page=page + 1, status=status_filter) }}">下一页 →</a>{% endif %}
+  <span class="muted">共 {{ total }} 条</span>
+  <form class="pager-jump" method="get" action="{{ url_for('foreshadow') }}">
+    <input type="hidden" name="status" value="{{ status_filter }}">
+    跳至 <input type="number" name="page" min="1" max="{{ pages }}" value="{{ page }}"> 页
+    <button class="btn-inline" type="submit">确定</button>
+  </form>
+</div>
+{% endif %}
+{% endmacro %}
+
 {% block content %}
 <div class="page-head">
   <h1>伏笔追踪</h1>
@@ -16,6 +41,8 @@
   <details class="vol-edit">
     <summary class="btn secondary btn-like">＋ 手动添加</summary>
     <form method="post" action="{{ url_for('foreshadow_add') }}" class="edit-pop">
+      <input type="hidden" name="k_status" value="{{ status_filter }}">
+      <input type="hidden" name="k_page" value="{{ page }}">
       <textarea name="content" rows="2" placeholder="伏笔内容，如：师父可能未死（遗书笔迹）" required></textarea>
       <input type="text" name="planted" placeholder="埋设于，如：第3章">
       <input type="text" name="plan_recycle" placeholder="计划回收，如：第45章 / 第三卷">
@@ -30,9 +57,20 @@
   {% elif not wizard_done %}<span class="muted">请先完成「新书向导」建档，再使用 LLM 生成</span>{% endif %}
 </div>
 
+<div class="filter-bar">
+  <span class="muted">状态：</span>
+  <a class="pg{% if not status_filter %} cur{% endif %}" href="{{ url_for('foreshadow') }}">全部</a>
+  {% for s in statuses %}
+  <a class="pg{% if status_filter == s %} cur{% endif %}" href="{{ url_for('foreshadow', status=s) }}">{{ s }}</a>
+  {% endfor %}
+</div>
+
 <div class="card">
   {% if not items %}
-  <p class="muted">还没有伏笔。点击「LLM 头脑风暴伏笔」，让 LLM 依据主线与各卷细纲设计几条；也可以手动添加。</p>
+  <p class="muted">
+    {% if status_filter %}「{{ status_filter }}」状态下暂无伏笔。<a href="{{ url_for('foreshadow') }}">查看全部</a>
+    {% else %}还没有伏笔。点击「LLM 头脑风暴伏笔」，让 LLM 依据主线与各卷细纲设计几条；也可以手动添加。{% endif %}
+  </p>
   {% else %}
   <table>
     <tr>
@@ -57,6 +95,8 @@
           <details class="vol-edit">
             <summary class="btn-inline">编辑</summary>
             <form method="post" action="{{ url_for('foreshadow_save', fid=f.id) }}" class="edit-pop">
+              <input type="hidden" name="k_status" value="{{ status_filter }}">
+              <input type="hidden" name="k_page" value="{{ page }}">
               <textarea name="content" rows="2" required>{{ f.content }}</textarea>
               <input type="text" name="planted" value="{{ f.planted }}" placeholder="埋设于">
               <input type="text" name="plan_recycle" value="{{ f.plan_recycle }}" placeholder="计划回收">
@@ -68,6 +108,8 @@
           </details>
           <form method="post" action="{{ url_for('foreshadow_delete', fid=f.id) }}"
                 onsubmit="return confirm('删除伏笔 {{ f.id }}？');">
+            <input type="hidden" name="k_status" value="{{ status_filter }}">
+            <input type="hidden" name="k_page" value="{{ page }}">
             <button class="btn-inline danger" type="submit">删除</button>
           </form>
         </div>
@@ -75,6 +117,7 @@
     </tr>
     {% endfor %}
   </table>
+  {{ pager(page, pages, total, status_filter) }}
   <p class="muted mt">红色「已到回收点」表示计划回收章节已小于等于当前已生成进度，写作时会作为提醒注入上下文。</p>
   {% endif %}
 </div>

@@ -198,10 +198,10 @@ def plan_chapters(ctx, brief, count, start_no, vol_label):
     raise LLMError("模型两次返回的章数都不足（要 %d 章，得 %d 章），请换个说法重试" % (count, last or 0))
 
 
-def generate_chapter(ctx, title, min_words, note=""):
+def generate_chapter(ctx, title, min_words, max_words, note=""):
     """生成一章正文（generation 槽位），返回正文字符串。"""
     _require_slot("generation")
-    sys_prompt = prompts.p_generate_chapter(ctx.get("no", 0), title, min_words, ctx["text"])
+    sys_prompt = prompts.p_generate_chapter(ctx.get("no", 0), title, min_words, max_words, ctx["text"])
     user = prompts.p_generate_chapter_user(note)
     text = chat([{"role": "system", "content": sys_prompt},
                  {"role": "user", "content": user}]).strip()
@@ -224,10 +224,10 @@ def _strip_junk(text, title):
     return "\n".join(lines).strip().strip("`").strip()
 
 
-def critic_review(ctx_brief, no, title, text, min_words):
+def critic_review(ctx_brief, no, title, text, min_words, max_words):
     """审校一章正文（critic 槽位）。返回 {"pass":bool,"score":int,"issues":[{"type","detail"}]}。"""
     _require_slot("critic")
-    sys_prompt = prompts.p_critic_review(no, title, count_words(text), min_words, ctx_brief)
+    sys_prompt = prompts.p_critic_review(no, title, count_words(text), min_words, max_words, ctx_brief)
     data = chat_json(sys_prompt, [{"role": "user", "content": "【待审校正文】\n" + text}],
                      slot="critic")
     issues = []
@@ -261,14 +261,14 @@ def clean_scene_end(raw):
     return None
 
 
-def revise_chapter(ctx, title, text, issues, min_words, note=""):
+def revise_chapter(ctx, title, text, issues, min_words, max_words, note=""):
     """按审校问题清单整体重写一章（generation 槽位），返回新正文。重写仍需遵守用户的补充要求。"""
     _require_slot("generation")
     issue_lines = "\n".join("- [%s] %s" % (i["type"], i["detail"]) for i in issues) or "- （无）"
     note_block = ""
     if note:
         note_block = prompts.p_revise_note_block(note)
-    sys_prompt = prompts.p_revise_chapter(ctx.get("no", 0), title, min_words,
+    sys_prompt = prompts.p_revise_chapter(ctx.get("no", 0), title, min_words, max_words,
                                           issue_lines, ctx["text"], note_block)
     new_text = chat([{"role": "system", "content": sys_prompt},
                      {"role": "user", "content": "【初稿】\n" + text}]).strip()

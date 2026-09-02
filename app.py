@@ -3,12 +3,13 @@ import json
 import urllib.error
 import urllib.request
 
-from flask import Flask, jsonify, redirect, render_template, request, url_for
+from flask import Flask, Response, jsonify, redirect, render_template, request, stream_with_context, url_for
 from markupsafe import Markup, escape
 
 from stores import bible_store as bst
 from stores import chapters_store as hst
 from stores import character_store as cst
+from stores import chat_store as kst
 from stores import config_store as cs
 from stores import foreshadow_store as fst
 from stores import memory_store as mst
@@ -18,6 +19,7 @@ from stores import style_store as sst
 from llm import character as cl
 from llm import client as lc
 from llm import content as cli
+from llm import prompts as prm
 import write_engine as we
 
 app = Flask(__name__)
@@ -79,6 +81,17 @@ def dashboard():
 
 MAX_BATCH_CHAPTERS = 20    # 单批最多生成章数（超出质量无法保证）
 MIN_WORDS_FLOOR = 200      # 每章最小字数下限
+CHAPTER_DEFAULT_SIZE = 5   # 章节列表默认每页章数
+CHAPTER_PAGE_SIZES = (5, 10, 20, 50)
+
+
+def _page_size_arg():
+    """每页章数：只允许白名单取值，非法值回落默认。"""
+    try:
+        size = int(request.args.get("size", CHAPTER_DEFAULT_SIZE))
+    except (TypeError, ValueError):
+        return CHAPTER_DEFAULT_SIZE
+    return size if size in CHAPTER_PAGE_SIZES else CHAPTER_DEFAULT_SIZE
 
 
 def _chapter_rows():
@@ -114,12 +127,17 @@ def _chapter_rows():
 def chapter():
     store = ost.load_store()
     hst.remove_orphans([ch["id"] for _, ch, _ in ost.iter_chapters(store)])
-    rows = _chapter_rows()
+    all_rows = list(reversed(_chapter_rows()))  # 倒序：最新章节排在最前
+    total = len(all_rows)
+    size = _page_size_arg()
+    pages = max(1, -(-total // size))
+    page = min(_page_arg("page"), pages)
+    rows = all_rows[(page - 1) * size:page * size]
     pending = hst.planned_batches()
     pending = pending[-1] if pending else None   # 同时只处理一个待确认方案
     pending_vol_label, pending_start_no = "", 0
     if pending:
-        pending_start_no = len(rows) + 1
+        pending_start_no = total + 1
         if pending.get("vol_id"):
             vol = ost.get_volume(pending["vol_id"])
             pending_vol_label = vol.get("title", "") if vol else "（卷已被删除，确认时将自动新建一卷）"
@@ -129,9 +147,11 @@ def chapter():
     if task is None:
         active = we.active_task()
         task = we.get_task(active) if active else None
-    return render_template("chapter.html", rows=rows, pending=pending,
+    return render_template("chapter.html", rows=rows, total=total,
+                           page=page, pages=pages, size=size, page_sizes=CHAPTER_PAGE_SIZES,
+                           pending=pending,
                            pending_vol_label=pending_vol_label, pending_start_no=pending_start_no,
-                           volumes=store["volumes"], next_no=len(rows) + 1,
+                           volumes=store["volumes"], next_no=total + 1,
                            max_batch=MAX_BATCH_CHAPTERS, task=task,
                            llm_on=lc.llm_available(), wizard_done=ps.wizard_done(),
                            msg=request.args.get("msg"), err=request.args.get("err"))
@@ -152,10 +172,13 @@ def chapter_plan():
     count = max(1, min(MAX_BATCH_CHAPTERS, count))
     try:
         min_words = int(request.form.get("min_words", 1500) or 1500)
+        max_words = int(request.form.get("max_words", 3000) or 3000)
     except ValueError:
-        min_words = 1500
+        min_words, max_words = 1500, 3000
     if min_words < MIN_WORDS_FLOOR:
         return redirect(url_for("chapter", err="每章最小字数不能低于 %d" % MIN_WORDS_FLOOR))
+    if max_words < min_words:
+        return redirect(url_for("chapter", err="最多字数不能小于最少字数"))
     vol_sel = request.form.get("vol_sel", "").strip()
     new_vol_title = request.form.get("new_vol_title", "").strip()
     volumes = ost.load_store()["volumes"]
@@ -175,7 +198,7 @@ def chapter_plan():
         plan = cli.plan_chapters(we.build_plan_context(), brief, count, start_no, vol_label)
     except cli.LLMError as e:
         return redirect(url_for("chapter", err="细纲规划失败：" + str(e)))
-    batch = hst.new_batch(brief, count, min_words, vol_id, vol_label if vol_id is None else "", plan)
+    batch = hst.new_batch(brief, count, min_words, max_words, vol_id, vol_label if vol_id is None else "", plan)
     return redirect(url_for("chapter", msg="细纲方案已生成，请逐章核对（可直接修改标题与细纲）后确认")
                     + "#plan")
 
@@ -186,10 +209,17 @@ def chapter_confirm(bid):
     batch = hst.get_batch(bid)
     if not batch or batch.get("status") != "planned":
         return redirect(url_for("chapter", err="批次不存在或已确认"))
-    titles = [t.strip() for t in request.form.getlist("plan_title")]
-    summaries = [s.strip() for s in request.form.getlist("plan_summary")]
-    note = request.form.get("note", "").strip()
-    plan = [{"title": t, "summary": s} for t, s in zip(titles, summaries) if t and s]
+    titles = request.form.getlist("plan_title")
+    summaries = request.form.getlist("plan_summary")
+    notes = request.form.getlist("plan_note")
+    batch_note = request.form.get("note", "").strip()
+    plan, row_notes = [], []
+    # 逐行对齐标题/细纲/本章补充（三者同名按序提交），标题或细纲为空的行丢弃
+    for t, s, n in zip(titles, summaries, notes + [""] * len(titles)):
+        t, s, n = t.strip(), s.strip(), n.strip()
+        if t and s:
+            plan.append({"title": t, "summary": s})
+            row_notes.append(n)
     if not plan:
         return redirect(url_for("chapter", err="细纲不能为空（每章都需要标题与细纲）"))
     # 先原子占住任务槽再写盘：并发重复提交时，后到的请求在这里就会被拦下，
@@ -204,13 +234,21 @@ def chapter_confirm(bid):
             title = batch.get("new_vol_title") or "第%d卷" % (len(ost.load_store()["volumes"]) + 1)
             vol = ost.add_volume(title, batch.get("brief", "")[:80])
         chapter_ids = []
-        for item in plan:
+        for item, chapter_note in zip(plan, row_notes):
             ch = ost.add_chapter(vol["id"], item["title"], item["summary"], status=ost.STATUS_TODO)
+            # 批次补充 + 本章补充合并为该章 entry 的 note，生成/重写时随 prompt 传给 LLM
+            parts = []
+            if batch_note:
+                parts.append("【全批要求】" + batch_note)
+            if chapter_note:
+                parts.append("【本章要求】" + chapter_note)
             hst.upsert_entry(hst.new_entry(ch["id"], batch_id=bid,
-                                           min_words=batch.get("min_words", 1500), note=note))
+                                           min_words=batch.get("min_words", 1500),
+                                           max_words=batch.get("max_words", 0),
+                                           note="\n".join(parts)))
             chapter_ids.append(ch["id"])
         hst.update_batch(bid, plan=plan, chapter_ids=chapter_ids, vol_id=vol["id"],
-                         note=note, status="confirmed")
+                         note=batch_note, status="confirmed")
     except Exception as e:
         we.abort_task(tid, "细纲落盘失败：%s" % e)
         return redirect(url_for("chapter", err="细纲落盘失败：" + str(e)))
@@ -347,7 +385,8 @@ def chapter_regenerate():
             if op == "reset":
                 hst.reset_for_regen(cid, note)
             else:
-                hst.upsert_entry(hst.new_entry(cid, min_words=we.DEFAULT_MIN_WORDS))
+                hst.upsert_entry(hst.new_entry(cid, min_words=we.DEFAULT_MIN_WORDS,
+                                               max_words=we.DEFAULT_MAX_WORDS))
     except Exception as e:
         we.abort_task(tid, "重置章节失败：%s" % e)
         return redirect(url_for("chapter", err="重置章节失败：" + str(e)))
@@ -837,12 +876,13 @@ def outline():
         pages = max(1, (total + OUTLINE_PAGE_SIZE - 1) // OUTLINE_PAGE_SIZE)
         p = min(max(1, p), pages)
         start = (p - 1) * OUTLINE_PAGE_SIZE
+        # (卷内序号, 章节) 序号跟随分页偏移连续编号；倒序展示，最新章在前
+        rows_all = list(enumerate(chapters, 1))[::-1]
         page_data[vol["id"]] = {
             "page": p,
             "pages": pages,
             "total": total,
-            # (卷内序号, 章节) 序号跟随分页偏移连续编号
-            "rows": list(enumerate(chapters[start:start + OUTLINE_PAGE_SIZE], start + 1)),
+            "rows": rows_all[start:start + OUTLINE_PAGE_SIZE],
         }
 
     def page_url(vid, p):
@@ -1112,11 +1152,32 @@ def bible_entry_delete(eid):
 
 # ---------- 伏笔追踪模块 ----------
 
+FORESHADOW_PER_PAGE = 10
+
+
+def _fid_no(item):
+    """F-001 → 1，用于编号排序。"""
+    digits = "".join(ch for ch in str(item.get("id", "")) if ch.isdigit())
+    return int(digits) if digits else 0
+
+
 @app.route("/foreshadow")
 def foreshadow():
     _, _, done_ch = _outline_stats()
     due = fst.due_items(done_ch)
-    return render_template("foreshadow.html", items=fst.load_store()["items"],
+    # 编号倒序：最新的伏笔排在最前
+    items = sorted(fst.load_store()["items"], key=_fid_no, reverse=True)
+    status_filter = request.args.get("status", "").strip()
+    if status_filter in fst.STATUSES:
+        items = [it for it in items if it.get("status") == status_filter]
+    else:
+        status_filter = ""
+    page = min(_page_arg("page"), max(1, -(-len(items) // FORESHADOW_PER_PAGE)))
+    pages = max(1, -(-len(items) // FORESHADOW_PER_PAGE))
+    return render_template("foreshadow.html",
+                           items=items[(page - 1) * FORESHADOW_PER_PAGE:page * FORESHADOW_PER_PAGE],
+                           page=page, pages=pages, total=len(items),
+                           status_filter=status_filter,
                            due_ids={it["id"] for it in due}, done_ch=done_ch,
                            statuses=fst.STATUSES,
                            llm_on=lc.llm_available(), wizard_done=ps.wizard_done(),
@@ -1134,34 +1195,46 @@ def foreshadow_brainstorm():
     return redirect(url_for("foreshadow", msg=f"已生成 {len(items)} 条伏笔，可继续编辑或删除"))
 
 
+def _foreshadow_back(**extra):
+    """增删改后回跳列表，保留当前状态筛选与页码（表单用隐藏域 k_status/k_page 带回）。"""
+    keep = {}
+    if request.form.get("k_status", "") in fst.STATUSES:
+        keep["status"] = request.form["k_status"]
+    try:
+        keep["page"] = max(1, int(request.form.get("k_page", 1)))
+    except (TypeError, ValueError):
+        pass
+    return redirect(url_for("foreshadow", **keep, **extra))
+
+
 @app.route("/foreshadow/add", methods=["POST"])
 def foreshadow_add():
     content = request.form.get("content", "").strip()
     if not content:
-        return redirect(url_for("foreshadow", err="伏笔内容不能为空"))
+        return _foreshadow_back(err="伏笔内容不能为空")
     fst.add_item(content, request.form.get("planted", "").strip(),
                  request.form.get("plan_recycle", "").strip(),
                  request.form.get("status", "待回收"))
-    return redirect(url_for("foreshadow", msg="已添加伏笔"))
+    return _foreshadow_back(msg="已添加伏笔")
 
 
 @app.route("/foreshadow/<fid>/save", methods=["POST"])
 def foreshadow_save(fid):
     content = request.form.get("content", "").strip()
     if not content:
-        return redirect(url_for("foreshadow", err="伏笔内容不能为空"))
+        return _foreshadow_back(err="伏笔内容不能为空")
     if not fst.update_item(fid, content, request.form.get("planted", "").strip(),
                            request.form.get("plan_recycle", "").strip(),
                            request.form.get("status", "待回收")):
-        return redirect(url_for("foreshadow", err="伏笔不存在"))
-    return redirect(url_for("foreshadow", msg=f"已保存 {fid}"))
+        return _foreshadow_back(err="伏笔不存在")
+    return _foreshadow_back(msg=f"已保存 {fid}")
 
 
 @app.route("/foreshadow/<fid>/delete", methods=["POST"])
 def foreshadow_delete(fid):
     if not fst.delete_item(fid):
-        return redirect(url_for("foreshadow", err="伏笔不存在"))
-    return redirect(url_for("foreshadow", msg=f"已删除 {fid}"))
+        return _foreshadow_back(err="伏笔不存在")
+    return _foreshadow_back(msg=f"已删除 {fid}")
 
 
 # ---------- 文风控制模块 ----------
@@ -1426,6 +1499,51 @@ def setup_save():
 def setup_reset():
     ps.reset_wizard()
     return redirect(url_for("setup"))
+
+
+# ---------- AI 聊天助手（全局悬浮面板） ----------
+
+
+@app.route("/assistant/history")
+def assistant_history():
+    return jsonify(ok=True, messages=kst.load_history())
+
+
+@app.route("/assistant/clear", methods=["POST"])
+def assistant_clear():
+    kst.clear_history()
+    return jsonify(ok=True)
+
+
+@app.route("/assistant/chat", methods=["POST"])
+def assistant_chat():
+    """流式聊天：text/plain 逐段输出；流结束后把整轮对话落盘。"""
+    msg = request.form.get("message", "").strip()
+    if not msg:
+        return jsonify(ok=False, detail="消息为空"), 400
+
+    def gen():
+        if not lc.slot_available("chat"):
+            yield "❌ 未配置聊天模型，请先到「模型配置」页配置「AI 聊天助手」槽位。"
+            return
+        sys_prompt = prm.ASSISTANT_SYS + prm.p_assistant_context(ps.load_project())
+        history = [{"role": m["role"], "content": m["content"]}
+                   for m in kst.load_history(tail=kst.CONTEXT_TAIL)]
+        messages = [{"role": "system", "content": sys_prompt}] + history + [
+            {"role": "user", "content": msg}]
+        parts = []
+        try:
+            for delta in lc.chat_stream(messages, slot="chat"):
+                parts.append(delta)
+                yield delta
+        except lc.LLMError as e:
+            yield "\n\n❌ %s" % e
+            return
+        reply = "".join(parts).strip()
+        if reply:
+            kst.append_turn(msg, reply)  # 锁内追加，不与并发对话互相覆盖
+
+    return Response(stream_with_context(gen()), mimetype="text/plain; charset=utf-8")
 
 
 if __name__ == "__main__":

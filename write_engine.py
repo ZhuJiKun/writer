@@ -29,7 +29,8 @@ from llm.client import LLMError
 MAX_REVISE_ROUNDS = 2      # 审校不通过时的最大重写次数（共最多 3 版正文）
 RECENT_FULL_CHARS = 3000   # 注入的上一章正文最大字符（取结尾部分）
 RECENT_SUMMARIES = 5       # 注入的逐章摘要条数
-DEFAULT_MIN_WORDS = 1500   # 无批次章节（大纲里原有的待生成章）重新生成时的默认字数
+DEFAULT_MIN_WORDS = 1500   # 无批次章节（大纲里原有的待生成章）重新生成时的默认最少字数
+DEFAULT_MAX_WORDS = 3000   # 同上，默认最多字数
 
 TASKS = {}
 _LOCK = threading.Lock()
@@ -314,6 +315,7 @@ def _run_generate(tid, chapter_ids):
         label = "第%d章《%s》" % (no, ch.get("title", ""))
         entry = hst.get_entry(cid) or hst.upsert_entry(hst.new_entry(cid))
         min_words = entry.get("min_words") or DEFAULT_MIN_WORDS
+        max_words = entry.get("max_words") or min_words * 2  # 旧数据没有上限字段，按 2 倍兜底
         note = entry.get("note", "")
         try:
             ctx = build_chapter_context(cid, cmap)
@@ -326,9 +328,9 @@ def _run_generate(tid, chapter_ids):
         # 第一步：生成正文。只有这一步失败才算章节失败
         task["current"] = label + " · 生成正文"
         hst.set_status(cid, hst.ST_GENERATING)
-        _log(tid, "%s：开始生成正文（要求 ≥%d 字）" % (label, min_words))
+        _log(tid, "%s：开始生成正文（要求 %d–%d 字）" % (label, min_words, max_words))
         try:
-            text = cli.generate_chapter(ctx, ch["title"], min_words, note)
+            text = cli.generate_chapter(ctx, ch["title"], min_words, max_words, note)
         except LLMError as e:
             hst.set_status(cid, hst.ST_FAILED, error="正文生成失败：" + str(e))
             _log(tid, "%s：正文生成失败 — %s" % (label, e))
@@ -344,27 +346,30 @@ def _run_generate(tid, chapter_ids):
             for round_no in range(MAX_REVISE_ROUNDS + 1):
                 task["current"] = label + " · 审校（第 %d 轮）" % (round_no + 1)
                 hst.set_status(cid, hst.ST_REVIEWING)
-                result = cli.critic_review(ctx["text"], no, ch["title"], text, min_words)
+                result = cli.critic_review(ctx["text"], no, ch["title"], text, min_words, max_words)
                 wc = cli.count_words(text)
                 result["word_count"] = wc
-                # 字数不足也记入审校历史，保证「记录页可见的问题」与「驱动重写的问题」一致
+                # 字数越界也记入审校历史，保证「记录页可见的问题」与「驱动重写的问题」一致
                 if wc < min_words:
                     result["issues"].append({"type": "字数",
                                              "detail": "实际约 %d 字，不足要求的 %d 字" % (wc, min_words)})
+                elif wc > max_words:
+                    result["issues"].append({"type": "字数",
+                                             "detail": "实际约 %d 字，超出上限的 %d 字" % (wc, max_words)})
                 review["history"].append({"round": round_no + 1, **result})
                 review["rounds"] = round_no + 1
                 _log(tid, "%s：第 %d 轮审校 %s（%d 分，约 %d 字，%d 个问题）"
                      % (label, round_no + 1, "通过" if result["pass"] else "未通过",
                         result["score"], wc, len(result["issues"])))
                 issues = result["issues"]
-                if result["pass"] and wc >= min_words:
+                if result["pass"] and min_words <= wc <= max_words:
                     passed = True
                     break
                 if round_no < MAX_REVISE_ROUNDS:
                     task["current"] = label + " · 按审校意见重写"
                     hst.set_status(cid, hst.ST_GENERATING)
                     try:
-                        text = cli.revise_chapter(ctx, ch["title"], text, issues, min_words, note)
+                        text = cli.revise_chapter(ctx, ch["title"], text, issues, min_words, max_words, note)
                     except LLMError as e:
                         review_err = "重写失败：" + str(e)
                         _log(tid, "%s：重写失败，保留上一版正文 — %s" % (label, e))

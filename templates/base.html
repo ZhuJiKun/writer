@@ -51,5 +51,107 @@
       });
     })();
   </script>
+
+  <!-- 全局悬浮 AI 聊天助手 -->
+  <button id="chat-fab" type="button" title="AI 助手" aria-label="AI 助手">💬</button>
+  <div id="chat-panel" class="chat-panel" hidden>
+    <div class="chat-head">
+      <span class="chat-title">🤖 AI 写作助手</span>
+      <button id="chat-clear" type="button" class="chat-head-btn" title="清空会话">🗑 清空</button>
+      <button id="chat-close" type="button" class="chat-head-btn" title="关闭">✕</button>
+    </div>
+    <div id="chat-messages" class="chat-messages"></div>
+    <div class="chat-input-row">
+      <textarea id="chat-input" rows="2" placeholder="问点什么..."></textarea>
+      <button id="chat-send" type="button" class="btn">发送</button>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var fab = document.getElementById('chat-fab');
+      var panel = document.getElementById('chat-panel');
+      var msgBox = document.getElementById('chat-messages');
+      var input = document.getElementById('chat-input');
+      var sendBtn = document.getElementById('chat-send');
+      var loaded = false;
+      var sending = false;
+
+      function scrollBottom() { msgBox.scrollTop = msgBox.scrollHeight; }
+
+      function addMsg(role, text) {
+        var div = document.createElement('div');
+        div.className = 'chat-msg ' + (role === 'user' ? 'from-user' : 'from-ai');
+        div.textContent = text;
+        msgBox.appendChild(div);
+        scrollBottom();
+        return div;
+      }
+
+      function loadHistory() {
+        fetch("{{ url_for('assistant_history') }}").then(function (r) { return r.json(); }).then(function (d) {
+          (d.messages || []).forEach(function (m) { addMsg(m.role, m.content); });
+        }).catch(function () {});
+      }
+
+      fab.addEventListener('click', function () {
+        panel.hidden = !panel.hidden;
+        if (!panel.hidden && !loaded) { loaded = true; loadHistory(); }
+        if (!panel.hidden) input.focus();
+      });
+      document.getElementById('chat-close').addEventListener('click', function () {
+        panel.hidden = true;
+      });
+      document.getElementById('chat-clear').addEventListener('click', function () {
+        if (!confirm('清空全部会话记录？')) return;
+        fetch("{{ url_for('assistant_clear') }}", { method: 'POST' }).then(function () {
+          msgBox.replaceChildren();
+        });
+      });
+
+      function setSending(v) {
+        sending = v;
+        sendBtn.disabled = v;
+        input.disabled = v;
+      }
+
+      function send() {
+        var text = input.value.trim();
+        if (!text || sending) return;
+        setSending(true);
+        addMsg('user', text);
+        input.value = '';
+        var bubble = addMsg('assistant', '思考中…');
+        fetch("{{ url_for('assistant_chat') }}", {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ message: text }),
+        }).then(function (resp) {
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          bubble.textContent = '';
+          var reader = resp.body.getReader();
+          var decoder = new TextDecoder('utf-8');
+          function pump() {
+            return reader.read().then(function (r) {
+              if (r.done) return;
+              bubble.textContent += decoder.decode(r.value, { stream: true });
+              scrollBottom();
+              return pump();
+            });
+          }
+          return pump();
+        }).catch(function (e) {
+          bubble.textContent = '❌ 请求失败：' + e.message;
+        }).finally(function () {
+          setSending(false);
+          input.focus();
+        });
+      }
+
+      sendBtn.addEventListener('click', send);
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+      });
+    })();
+  </script>
 </body>
 </html>

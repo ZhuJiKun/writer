@@ -64,24 +64,24 @@
   {% else %}
   <table class="mt">
     <tr>
-      <th style="width:56px">章</th>
-      <th style="width:200px">标题</th>
+      <th class="cell-middle" style="width:56px">章</th>
+      <th class="cell-middle" style="width:200px">标题</th>
       <th>细纲摘要</th>
-      <th style="width:80px">状态</th>
-      <th style="width:120px">创建时间</th>
-      <th style="width:64px">操作</th>
+      <th class="cell-middle" style="width:80px">状态</th>
+      <th class="cell-middle" style="width:120px">创建时间</th>
+      <th class="cell-middle" style="width:64px">操作</th>
     </tr>
     {% for no, ch in pd.rows %}
     <tr>
-      <td>{{ no }}</td>
-      <td>{{ ch.title }}</td>
+      <td class="cell-middle">{{ no }}</td>
+      <td class="cell-middle">{{ ch.title }}</td>
       <td class="muted">{{ ch.summary or "—" }}</td>
-      <td>
+      <td class="cell-middle">
         {% if ch.status == "已生成" %}<span class="badge green">已生成</span>
         {% else %}<span class="badge gray">待生成</span>{% endif %}
       </td>
-      <td class="muted">{{ ch.created_at }}</td>
-      <td>
+      <td class="muted cell-middle">{{ ch.created_at }}</td>
+      <td class="cell-middle">
         <form method="post" action="{{ url_for('outline_chapter_delete', cid=ch.id) }}"
               onsubmit="return confirm('删除第 {{ no }} 章「{{ ch.title }}」？');">
           <button class="btn-inline danger" type="submit">删除</button>
@@ -96,6 +96,13 @@
     {% if pd.page > 1 %}<a class="btn-inline" href="{{ page_url(vol.id, pd.page - 1) }}">← 上一页</a>{% endif %}
     <span class="muted">第 {{ pd.page }} / {{ pd.pages }} 页 · 共 {{ pd.total }} 章</span>
     {% if pd.page < pd.pages %}<a class="btn-inline" href="{{ page_url(vol.id, pd.page + 1) }}">下一页 →</a>{% endif %}
+    <form class="pager-jump" method="get" action="{{ url_for('outline') }}#vol-{{ vol.id }}">
+      {% for v in store.volumes %}
+        {% if v.id != vol.id %}<input type="hidden" name="p_{{ v.id }}" value="{{ page_data[v.id].page }}">{% endif %}
+      {% endfor %}
+      跳至 <input type="number" name="p_{{ vol.id }}" min="1" max="{{ pd.pages }}" value="{{ pd.page }}"> 页
+      <button class="btn-inline" type="submit">确定</button>
+    </form>
   </div>
   {% endif %}
   {% endif %}

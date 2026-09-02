@@ -22,6 +22,7 @@ SLOTS = {
     "generation": {"name": "正文生成", "desc": "旗舰模型，负责章节正文写作，质量优先"},
     "critic": {"name": "审校 Critic", "desc": "中档模型，负责一致性 / 逻辑 / 文风检查"},
     "extraction": {"name": "状态抽取 / 摘要", "desc": "便宜小模型，负责事实抽取与章节压缩，成本优先"},
+    "chat": {"name": "AI 聊天助手", "desc": "右下角悬浮聊天面板使用的模型，默认跟随正文生成"},
 }
 
 DEFAULT_SLOT = {"preset": "custom", "base_url": "", "api_key": "", "model": "", "protocol": "openai", "inherit": False}
@@ -33,6 +34,7 @@ def default_config():
             "generation": dict(DEFAULT_SLOT),
             "critic": {**DEFAULT_SLOT, "inherit": True},
             "extraction": {**DEFAULT_SLOT, "inherit": True},
+            "chat": {**DEFAULT_SLOT, "inherit": True},
         }
     }
 

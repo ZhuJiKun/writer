@@ -60,7 +60,7 @@ def save_store(store):
 # ---------- 批次 ----------
 
 @synchronized(_LOCK)
-def new_batch(brief, count, min_words, vol_id, new_vol_title, plan):
+def new_batch(brief, count, min_words, max_words, vol_id, new_vol_title, plan):
     """创建「已规划、待确认」批次。plan: [{"title","summary"}, ...]"""
     store = load_store()
     batch = {
@@ -68,6 +68,7 @@ def new_batch(brief, count, min_words, vol_id, new_vol_title, plan):
         "brief": brief,
         "count": count,
         "min_words": min_words,
+        "max_words": max_words,
         "vol_id": vol_id,                # None 表示新建卷
         "new_vol_title": new_vol_title,  # vol_id 为 None 时使用
         "plan": plan,
@@ -120,7 +121,7 @@ def planned_batches():
 # entry 的 revise 字段：暂存一份「LLM 修改稿」（{"instruction","text","created_at"}），
 # 等用户在对比页二选一；采用或放弃后删除该字段。reset_for_regen 会一并清掉。
 
-def new_entry(chapter_id, batch_id="", min_words=1500, note=""):
+def new_entry(chapter_id, batch_id="", min_words=1500, max_words=3000, note=""):
     return {
         "chapter_id": chapter_id,
         "batch_id": batch_id,
@@ -128,6 +129,7 @@ def new_entry(chapter_id, batch_id="", min_words=1500, note=""):
         "content": "",
         "word_count": 0,
         "min_words": min_words,
+        "max_words": max_words,          # 0/缺省 = 旧数据，引擎里回落为 min_words * 2
         "note": note,                    # 生成附加要求（确认细纲时的补充 / 重新生成时的要求）
         "scene_end": None,               # 本章结尾场景锚点 {"time","place","present"}，草稿期由审校顺带抽取
         "review": {"rounds": 0, "final": None, "history": []},
