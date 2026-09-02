@@ -52,7 +52,8 @@ def read_json(path):
 
 
 def write_json(path, data):
-    """原子写：先写临时文件再 os.replace，避免半截文件。"""
+    """原子写：先写临时文件再 os.replace，避免半截文件。目录不存在时自动创建。"""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
