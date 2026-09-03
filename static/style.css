@@ -484,8 +484,27 @@ mark.diff-ins {
 /* ---------- LLM 标题/概要建议确认页 ---------- */
 .diff-new-text { color: #166534; }
 
+/* ---------- 伏笔追踪：全列高度居中 ---------- */
+.fs-table th, .fs-table td { vertical-align: middle; }
+
+/* ---------- 正文阅读页：字号 / 背景 / 复制 ---------- */
+.reader-toolbar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  margin-bottom: 12px; font-size: 12.5px; color: var(--muted);
+}
+.reader-opts { display: flex; gap: 6px; }
+.reader-opt {
+  padding: 4px 12px; border: 1px solid var(--border); border-radius: 14px;
+  background: #fff; color: #4b5563; font-size: 12.5px; cursor: pointer;
+  transition: background 0.15s;
+}
+.reader-opt:hover { background: var(--accent-soft); }
+.reader-opt.cur { background: var(--accent); border-color: var(--accent); color: #fff; }
+#readMode { border-radius: 10px; padding: 26px 30px; transition: background 0.15s, color 0.15s; }
+.reader-p { line-height: 2; margin: 0 0 14px; text-indent: 2em; }
+
 /* ---------- 全局悬浮 AI 聊天助手 ---------- */
-#chat-fab {
+#aichat-fab {
   position: fixed;
   right: 22px;
   bottom: 22px;
@@ -502,7 +521,7 @@ mark.diff-ins {
   box-shadow: 0 4px 14px rgba(79, 110, 247, 0.35);
   transition: transform 0.15s, box-shadow 0.15s;
 }
-#chat-fab:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(79, 110, 247, 0.45); }
+#aichat-fab:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(79, 110, 247, 0.45); }
 
 .chat-panel {
   position: fixed;

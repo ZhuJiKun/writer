@@ -72,14 +72,16 @@
     {% else %}还没有伏笔。点击「LLM 头脑风暴伏笔」，让 LLM 依据主线与各卷细纲设计几条；也可以手动添加。{% endif %}
   </p>
   {% else %}
-  <table>
+  <table class="fs-table">
     <tr>
+      <th style="width:34px" class="cell-center"><input type="checkbox" id="fsAll" title="全选" onclick="fsToggleAll(this)"></th>
       <th style="width:70px">编号</th><th>伏笔内容</th>
       <th style="width:100px">埋设于</th><th style="width:130px">计划回收</th>
       <th style="width:110px">状态</th><th style="width:96px">操作</th>
     </tr>
     {% for f in items %}
     <tr>
+      <td class="cell-center"><input type="checkbox" class="fs-check" name="fids" value="{{ f.id }}" form="fsBatchDel"></td>
       <td><b>{{ f.id }}</b></td>
       <td>{{ f.content }}</td>
       <td>{{ f.planted or "—" }}</td>
@@ -117,6 +119,22 @@
     </tr>
     {% endfor %}
   </table>
+  <form id="fsBatchDel" method="post" action="{{ url_for('foreshadow_batch_delete') }}"
+        onsubmit="return fsBatchSubmit()" style="display:flex; justify-content:flex-end; margin-top:12px">
+    <input type="hidden" name="k_status" value="{{ status_filter }}">
+    <input type="hidden" name="k_page" value="{{ page }}">
+    <button class="btn-inline danger" type="submit">🗑 批量删除</button>
+  </form>
+  <script>
+  function fsToggleAll(box) {
+    document.querySelectorAll('.fs-check').forEach(function (c) { c.checked = box.checked; });
+  }
+  function fsBatchSubmit() {
+    var n = document.querySelectorAll('.fs-check:checked').length;
+    if (!n) { alert('请先勾选要删除的伏笔'); return false; }
+    return confirm('确定删除勾选的 ' + n + ' 条伏笔？此操作不可恢复');
+  }
+  </script>
   {{ pager(page, pages, total, status_filter) }}
   <p class="muted mt">红色「已到回收点」表示计划回收章节已小于等于当前已生成进度，写作时会作为提醒注入上下文。</p>
   {% endif %}

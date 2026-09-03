@@ -35,9 +35,25 @@
     </div>
   </div>
 
+  <div class="reader-toolbar">
+    <span>字号</span>
+    <span class="reader-opts" id="fontOpts">
+      <button type="button" class="reader-opt" data-font="s">小</button>
+      <button type="button" class="reader-opt" data-font="m">中</button>
+      <button type="button" class="reader-opt" data-font="l">大</button>
+    </span>
+    <span>背景</span>
+    <span class="reader-opts" id="bgOpts">
+      <button type="button" class="reader-opt" data-bg="white">白</button>
+      <button type="button" class="reader-opt" data-bg="gray">灰</button>
+      <button type="button" class="reader-opt" data-bg="black">黑</button>
+    </span>
+    <button type="button" class="btn-inline" id="copyBtn" onclick="copyText(this)">📋 复制正文</button>
+  </div>
+
   <div id="readMode">
     {% for p in paragraphs %}
-    <p style="line-height:2; margin:0 0 14px; text-indent:2em">{{ p }}</p>
+    <p class="reader-p">{{ p }}</p>
     {% endfor %}
   </div>
 
@@ -86,6 +102,68 @@ function guardRevise(form) {
   var btn = document.getElementById('reviseSubmit');
   btn.disabled = true; btn.textContent = 'LLM 修改中…';
   return true;
+}
+
+/* ---------- 阅读设置：字号 / 背景（localStorage 记忆） ---------- */
+var FONT_SIZES = { s: '14px', m: '16px', l: '19px' };
+var BG_THEMES = {
+  white: { bg: '#ffffff', fg: '#26292f' },
+  gray:  { bg: '#eae8e3', fg: '#403d37' },
+  black: { bg: '#1d2129', fg: '#c9cdd4' }
+};
+function applyReader(font, bg) {
+  var read = document.getElementById('readMode');
+  if (!read) return;
+  read.style.fontSize = FONT_SIZES[font] || FONT_SIZES.m;
+  var theme = BG_THEMES[bg] || BG_THEMES.white;
+  read.style.background = theme.bg;
+  read.style.color = theme.fg;
+  document.querySelectorAll('#fontOpts .reader-opt').forEach(function (b) {
+    b.classList.toggle('cur', b.dataset.font === font);
+  });
+  document.querySelectorAll('#bgOpts .reader-opt').forEach(function (b) {
+    b.classList.toggle('cur', b.dataset.bg === bg);
+  });
+}
+function initReader() {
+  var font = localStorage.getItem('reader_font') || 'm';
+  var bg = localStorage.getItem('reader_bg') || 'white';
+  if (!FONT_SIZES[font]) font = 'm';
+  if (!BG_THEMES[bg]) bg = 'white';
+  applyReader(font, bg);
+  document.querySelectorAll('#fontOpts .reader-opt').forEach(function (b) {
+    b.onclick = function () { localStorage.setItem('reader_font', b.dataset.font);
+      applyReader(b.dataset.font, localStorage.getItem('reader_bg') || 'white'); };
+  });
+  document.querySelectorAll('#bgOpts .reader-opt').forEach(function (b) {
+    b.onclick = function () { localStorage.setItem('reader_bg', b.dataset.bg);
+      applyReader(localStorage.getItem('reader_font') || 'm', b.dataset.bg); };
+  });
+}
+initReader();
+
+/* ---------- 一键复制正文 ---------- */
+function copyText(btn) {
+  var text = document.getElementById('readMode').innerText.trim();
+  function done() {
+    btn.textContent = '✅ 已复制';
+    setTimeout(function () { btn.textContent = '📋 复制正文'; }, 1600);
+  }
+  function fallback() {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); done(); }
+    catch (e) { alert('复制失败，请手动选择文本复制'); }
+    document.body.removeChild(ta);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done, fallback);
+  } else {
+    fallback();
+  }
 }
 </script>
 

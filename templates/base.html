@@ -52,27 +52,27 @@
     })();
   </script>
 
-  <!-- 全局悬浮 AI 聊天助手 -->
-  <button id="chat-fab" type="button" title="AI 助手" aria-label="AI 助手">💬</button>
-  <div id="chat-panel" class="chat-panel" hidden>
+  <!-- 全局悬浮 AI 聊天助手（id 统一 aichat- 前缀，避免与向导/角色对话页的 chat-* 冲突） -->
+  <button id="aichat-fab" type="button" title="AI 助手" aria-label="AI 助手">💬</button>
+  <div id="aichat-panel" class="chat-panel" hidden>
     <div class="chat-head">
       <span class="chat-title">🤖 AI 写作助手</span>
-      <button id="chat-clear" type="button" class="chat-head-btn" title="清空会话">🗑 清空</button>
-      <button id="chat-close" type="button" class="chat-head-btn" title="关闭">✕</button>
+      <button id="aichat-clear" type="button" class="chat-head-btn" title="清空会话">🗑 清空</button>
+      <button id="aichat-close" type="button" class="chat-head-btn" title="关闭">✕</button>
     </div>
-    <div id="chat-messages" class="chat-messages"></div>
+    <div id="aichat-messages" class="chat-messages"></div>
     <div class="chat-input-row">
-      <textarea id="chat-input" rows="2" placeholder="问点什么..."></textarea>
-      <button id="chat-send" type="button" class="btn">发送</button>
+      <textarea id="aichat-input" rows="2" placeholder="问点什么..."></textarea>
+      <button id="aichat-send" type="button" class="btn">发送</button>
     </div>
   </div>
   <script>
     (function () {
-      var fab = document.getElementById('chat-fab');
-      var panel = document.getElementById('chat-panel');
-      var msgBox = document.getElementById('chat-messages');
-      var input = document.getElementById('chat-input');
-      var sendBtn = document.getElementById('chat-send');
+      var fab = document.getElementById('aichat-fab');
+      var panel = document.getElementById('aichat-panel');
+      var msgBox = document.getElementById('aichat-messages');
+      var input = document.getElementById('aichat-input');
+      var sendBtn = document.getElementById('aichat-send');
       var loaded = false;
       var sending = false;
 
@@ -98,10 +98,10 @@
         if (!panel.hidden && !loaded) { loaded = true; loadHistory(); }
         if (!panel.hidden) input.focus();
       });
-      document.getElementById('chat-close').addEventListener('click', function () {
+      document.getElementById('aichat-close').addEventListener('click', function () {
         panel.hidden = true;
       });
-      document.getElementById('chat-clear').addEventListener('click', function () {
+      document.getElementById('aichat-clear').addEventListener('click', function () {
         if (!confirm('清空全部会话记录？')) return;
         fetch("{{ url_for('assistant_clear') }}", { method: 'POST' }).then(function () {
           msgBox.replaceChildren();
@@ -121,10 +121,14 @@
         addMsg('user', text);
         input.value = '';
         var bubble = addMsg('assistant', '思考中…');
+        var ctrl = new AbortController();
+        // 前端硬超时：防止 LLM 流式请求挂死时界面一直卡在禁用状态
+        var timer = setTimeout(function () { ctrl.abort(); }, 120000);
         fetch("{{ url_for('assistant_chat') }}", {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({ message: text }),
+          signal: ctrl.signal,
         }).then(function (resp) {
           if (!resp.ok) throw new Error('HTTP ' + resp.status);
           bubble.textContent = '';
@@ -140,8 +144,13 @@
           }
           return pump();
         }).catch(function (e) {
-          bubble.textContent = '❌ 请求失败：' + e.message;
+          if (e.name === 'AbortError') {
+            bubble.textContent = '⏱ 等待超时（2 分钟无响应），可能是网络或模型服务异常，请稍后重试。';
+          } else {
+            bubble.textContent = '❌ 请求失败：' + e.message;
+          }
         }).finally(function () {
+          clearTimeout(timer);
           setSending(false);
           input.focus();
         });

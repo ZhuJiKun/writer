@@ -1237,6 +1237,16 @@ def foreshadow_delete(fid):
     return _foreshadow_back(msg=f"已删除 {fid}")
 
 
+@app.route("/foreshadow/batch_delete", methods=["POST"])
+def foreshadow_batch_delete():
+    """批量删除勾选的伏笔（复选框通过 form 属性挂到表格外部的批量表单）。"""
+    fids = list(dict.fromkeys(request.form.getlist("fids")))
+    if not fids:
+        return _foreshadow_back(err="请先勾选要删除的伏笔")
+    deleted = sum(1 for fid in fids if fst.delete_item(fid))
+    return _foreshadow_back(msg=f"已删除 {deleted} 条伏笔")
+
+
 # ---------- 文风控制模块 ----------
 
 @app.route("/style")
