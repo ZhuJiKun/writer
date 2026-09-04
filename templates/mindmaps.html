@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}思维导图{% endblock %}
+
+{% macro pager(page, pages, total) %}
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn-inline" href="{{ url_for('mindmaps', page=page - 1) }}">← 上一页</a>{% endif %}
+  {% set ns = namespace(prev=0) %}
+  {% for p in range(1, pages + 1) %}
+    {% if p == 1 or p == pages or (p >= page - 2 and p <= page + 2) %}
+      {% if ns.prev and p > ns.prev + 1 %}<span class="muted">…</span>{% endif %}
+      {% if p == page %}<span class="pg cur">{{ p }}</span>
+      {% else %}<a class="pg" href="{{ url_for('mindmaps', page=p) }}">{{ p }}</a>{% endif %}
+      {% set ns.prev = p %}
+    {% endif %}
+  {% endfor %}
+  {% if page < pages %}<a class="btn-inline" href="{{ url_for('mindmaps', page=page + 1) }}">下一页 →</a>{% endif %}
+  <span class="muted">共 {{ total }} 张</span>
+  <form class="pager-jump" method="get" action="{{ url_for('mindmaps') }}">
+    跳至 <input type="number" name="page" min="1" max="{{ pages }}" value="{{ page }}"> 页
+    <button class="btn-inline" type="submit">确定</button>
+  </form>
+</div>
+{% endif %}
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <h1>思维导图</h1>
+  <p class="subtitle">以节点树的形式梳理剧情线、人物关系、势力格局等创作思路</p>
+</div>
+
+{% if err %}<div class="alert">❌ {{ err }}</div>{% endif %}
+{% if msg %}<div class="toast-ok">✅ {{ msg }}</div>{% endif %}
+
+<div class="action-bar">
+  <details class="vol-edit">
+    <summary class="btn btn-like">＋ 新建思维导图</summary>
+    <form method="post" action="{{ url_for('mindmap_new') }}" class="edit-pop">
+      <input type="text" name="name" placeholder="名称，如：第一卷冲突梳理" required>
+      <input type="text" name="remark" placeholder="备注（可选）">
+      <button class="btn" type="submit">创建</button>
+    </form>
+  </details>
+</div>
+
+<div class="card">
+  {% if not maps %}
+  <p class="muted">还没有思维导图。点击「＋ 新建思维导图」，开始梳理你的创作思路。</p>
+  {% else %}
+  <table class="fs-table">
+    <tr>
+      <th>名称</th><th>备注</th>
+      <th style="width:130px">创建时间</th><th style="width:130px">更新时间</th>
+      <th style="width:130px">操作</th>
+    </tr>
+    {% for m in maps %}
+    <tr>
+      <td><b>{{ m.name }}</b></td>
+      <td>{{ m.remark or "—" }}</td>
+      <td class="cell-center">{{ m.created_at }}</td>
+      <td class="cell-center">{{ m.updated_at }}</td>
+      <td>
+        <div class="vol-tools">
+          <a class="btn-inline" href="{{ url_for('mindmap_detail', mid=m.id) }}">查看 / 编辑</a>
+          <form method="post" action="{{ url_for('mindmap_delete', mid=m.id) }}"
+                onsubmit="return confirm('删除思维导图「{{ m.name }}」？此操作不可恢复');">
+            <button class="btn-inline danger" type="submit">删除</button>
+          </form>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {{ pager(page, pages, total) }}
+  {% endif %}
+</div>
+{% endblock %}

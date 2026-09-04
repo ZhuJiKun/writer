@@ -2,7 +2,7 @@
 {% block title %}修改对比 · 第{{ no }}章 {{ title }}{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1>第 {{ no }} 章《{{ title }}》 · LLM 修改对比</h1>
+  <h1>第 {{ no }} 章《{{ title }}》 · 修改对比</h1>
   <p class="subtitle">修改要求：{{ draft.instruction }} · 生成于 {{ draft.created_at }}</p>
   <p class="mt">
     <a class="btn-inline" href="{{ url_for('chapter_text', cid=entry.chapter_id) }}">← 返回阅读（暂不决定）</a>
@@ -24,7 +24,7 @@
   <div class="diff-table">
     <div class="diff-row diff-head">
       <div class="diff-cell">原文（当前正文）</div>
-      <div class="diff-cell">LLM 修改稿</div>
+      <div class="diff-cell">修改稿（新文本）</div>
     </div>
     {% for r in rows %}
       {% if r.kind == "same" %}

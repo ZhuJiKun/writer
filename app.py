@@ -1,5 +1,6 @@
 import difflib
 import json
+import os
 import urllib.error
 import urllib.request
 
@@ -13,6 +14,7 @@ from stores import chat_store as kst
 from stores import config_store as cs
 from stores import foreshadow_store as fst
 from stores import memory_store as mst
+from stores import mindmap_store as mmst
 from stores import outline_store as ost
 from stores import project_store as ps
 from stores import style_store as sst
@@ -23,6 +25,16 @@ from llm import prompts as prm
 import write_engine as we
 
 app = Flask(__name__)
+
+
+@app.context_processor
+def _static_versions():
+    """给 style.css 加 mtime 版本号，样式文件更新后浏览器自动弃用缓存。"""
+    try:
+        v = int(os.path.getmtime(os.path.join(app.static_folder, "style.css")))
+    except OSError:
+        v = 0
+    return {"css_v": v}
 
 
 @app.template_filter("nl2br")
@@ -543,6 +555,38 @@ def chapter_text_compare(cid):
                            title=ch.get("title", ""), draft=draft,
                            rows=_diff_rows(entry["content"], draft["text"]),
                            new_words=cli.count_words(draft["text"]))
+
+
+def normalize_dialogue_quotes(text):
+    """对话引号统一为中文双引号：「」→“”；英文直引号按出现顺序交替配对为 “...”。"""
+    out = []
+    open_quote = False
+    for ch in text:
+        if ch == "「":
+            out.append("“")
+        elif ch == "」":
+            out.append("”")
+        elif ch == '"':
+            out.append("”" if open_quote else "“")
+            open_quote = not open_quote
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+@app.route("/chapter/text/<cid>/format_quote", methods=["POST"])
+def chapter_text_format_quote(cid):
+    """格式替换：对话引号统一为中文双引号。纯本地转换（不调 LLM），结果存为修改稿进对比页。"""
+    entry = hst.get_entry(cid)
+    vol, ch, no = ost.find_chapter(cid)
+    if not entry or not entry.get("content") or not ch:
+        return redirect(url_for("chapter", err="该章节还没有正文"))
+    new_text = normalize_dialogue_quotes(entry["content"])
+    if new_text == entry["content"]:
+        return redirect(url_for("chapter_text", cid=cid,
+                                msg="未发现「」或英文直引号，正文无需格式替换"))
+    hst.set_revise_draft(cid, "格式替换：对话引号统一为中文双引号", new_text)
+    return redirect(url_for("chapter_text_compare", cid=cid))
 
 
 @app.route("/chapter/text/<cid>/revise/apply", methods=["POST"])
@@ -1245,6 +1289,94 @@ def foreshadow_batch_delete():
         return _foreshadow_back(err="请先勾选要删除的伏笔")
     deleted = sum(1 for fid in fids if fst.delete_item(fid))
     return _foreshadow_back(msg=f"已删除 {deleted} 条伏笔")
+
+
+# ---------- 思维导图模块 ----------
+
+MINDMAP_PER_PAGE = 10
+
+
+@app.route("/mindmaps")
+def mindmaps():
+    maps = mmst.list_maps()
+    pages = max(1, -(-len(maps) // MINDMAP_PER_PAGE))
+    page = min(_page_arg("page"), pages)
+    return render_template("mindmaps.html",
+                           maps=maps[(page - 1) * MINDMAP_PER_PAGE:page * MINDMAP_PER_PAGE],
+                           page=page, pages=pages, total=len(maps),
+                           msg=request.args.get("msg"), err=request.args.get("err"))
+
+
+@app.route("/mindmaps/new", methods=["POST"])
+def mindmap_new():
+    name = request.form.get("name", "").strip()
+    if not name:
+        return redirect(url_for("mindmaps", err="请输入思维导图名称"))
+    m = mmst.add_map(name, request.form.get("remark", ""))
+    return redirect(url_for("mindmap_detail", mid=m["id"]))
+
+
+@app.route("/mindmaps/<mid>/meta", methods=["POST"])
+def mindmap_meta(mid):
+    if not mmst.update_map_meta(mid, request.form.get("name", ""), request.form.get("remark", "")):
+        return redirect(url_for("mindmaps", err="思维导图不存在"))
+    return redirect(url_for("mindmap_detail", mid=mid, msg="已保存"))
+
+
+@app.route("/mindmaps/<mid>/delete", methods=["POST"])
+def mindmap_delete(mid):
+    if not mmst.delete_map(mid):
+        return redirect(url_for("mindmaps", err="思维导图不存在"))
+    return redirect(url_for("mindmaps", msg="思维导图已删除"))
+
+
+@app.route("/mindmaps/<mid>")
+def mindmap_detail(mid):
+    m = mmst.get_map(mid)
+    if not m:
+        return redirect(url_for("mindmaps", err="思维导图不存在"))
+    return render_template("mindmap.html", m=m,
+                           msg=request.args.get("msg"), err=request.args.get("err"))
+
+
+def _mm_resp(ok, **kw):
+    body = {"ok": ok}
+    body.update(kw)
+    return jsonify(body), (200 if ok else 400)
+
+
+@app.route("/mindmaps/<mid>/node/add", methods=["POST"])
+def mindmap_node_add(mid):
+    node = mmst.add_node(mid, request.form.get("parent_id", "").strip(),
+                         request.form.get("text", ""))
+    if not node:
+        return _mm_resp(False, err="思维导图或父节点不存在")
+    return _mm_resp(True, node=node, updated_at=mmst.get_map(mid)["updated_at"])
+
+
+@app.route("/mindmaps/<mid>/node/<nid>/update", methods=["POST"])
+def mindmap_node_update(mid, nid):
+    node = mmst.update_node(mid, nid, request.form.get("text", ""))
+    if not node:
+        return _mm_resp(False, err="节点不存在")
+    return _mm_resp(True, node=node, updated_at=mmst.get_map(mid)["updated_at"])
+
+
+@app.route("/mindmaps/<mid>/node/<nid>/style", methods=["POST"])
+def mindmap_node_style(mid, nid):
+    style = {k: request.form.get(k, "") for k in ("bg", "border", "color")}
+    node = mmst.update_node_style(mid, nid, style)
+    if not node:
+        return _mm_resp(False, err="节点不存在")
+    return _mm_resp(True, node=node)
+
+
+@app.route("/mindmaps/<mid>/node/<nid>/delete", methods=["POST"])
+def mindmap_node_delete(mid, nid):
+    n = mmst.delete_node(mid, nid)
+    if not n:
+        return _mm_resp(False, err="节点不存在")
+    return _mm_resp(True, deleted=n)
 
 
 # ---------- 文风控制模块 ----------

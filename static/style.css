@@ -613,3 +613,176 @@ mark.diff-ins {
 .chat-input-row textarea:focus { border-color: var(--accent); }
 .chat-input-row .btn { flex-shrink: 0; }
 .chat-input-row textarea:disabled, .chat-input-row .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* ---------- 思维导图 ---------- */
+.mm-wrap { padding: 10px; }
+.mm-canvas {
+  position: relative;
+  overflow: auto;
+  min-height: 480px;
+  padding: 40px 48px;
+  background:
+    radial-gradient(circle, #e6e9f1 1px, transparent 1px) 0 0 / 24px 24px,
+    #fbfcfe;
+  border-radius: 10px;
+}
+.mm-empty { padding: 24px 4px; }
+
+/* SVG 连线层：铺在内容底下 */
+.mm-links { position: absolute; left: 0; top: 0; pointer-events: none; }
+.mm-link {
+  fill: none;
+  stroke: #b8c1d4;
+  stroke-width: 2;
+  opacity: 0.75;
+}
+
+.mm-forest {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 36px;
+  z-index: 1;
+}
+
+/* 横向树：节点在左，子节点列在右 */
+.mm-branch { display: flex; align-items: center; }
+.mm-children {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 18px;
+}
+.mm-children > .mm-branch { padding-left: 72px; }
+
+.mm-node {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 280px;
+  padding: 8px 14px;
+  background: var(--card);
+  border: 1.5px solid #e0e5ef;
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(20, 24, 40, 0.06);
+  font-size: 13.5px;
+  line-height: 1.5;
+  word-break: break-word;
+  cursor: default;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+.mm-node:hover {
+  border-color: var(--bc, var(--accent));
+  box-shadow: 0 4px 14px rgba(20, 24, 40, 0.10);
+  transform: translateY(-1px);
+}
+/* 根节点：主题色实心胶囊 */
+.mm-node.mm-root {
+  background: linear-gradient(135deg, #5a78f8, #4059d6);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+  font-size: 15px;
+  padding: 10px 18px;
+  border-radius: 12px;
+}
+/* 一级分支：分支色描边 + 左侧色点 */
+.mm-node.mm-l1 {
+  border-color: var(--bc, var(--accent));
+  font-weight: 600;
+  font-size: 14px;
+}
+.mm-node.mm-l1::before {
+  content: "";
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--bc, var(--accent));
+  margin-right: 4px;
+}
+/* 更深层节点：左侧细色条 */
+.mm-node:not(.mm-root):not(.mm-l1) {
+  border-left: 4px solid var(--bc, #d0d7e4);
+}
+
+/* 工具条内联在节点文本右侧，hover 节点时出现 */
+.mm-tools {
+  display: none;
+  align-items: center;
+  gap: 1px;
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid rgba(128, 138, 155, 0.35);
+}
+.mm-node:hover .mm-tools { display: inline-flex; }
+.mm-tools button {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 4px 5px;
+  border-radius: 5px;
+  color: inherit;   /* 跟随节点字体色，适配自定义背景 */
+  opacity: 0.6;
+}
+.mm-tools button:hover { background: rgba(128, 138, 155, 0.18); opacity: 1; }
+
+/* 节点颜色选择器（🎨 弹出） */
+.mm-picker {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(20, 24, 40, 0.14);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text);
+  white-space: nowrap;
+  cursor: default;
+}
+.mm-picker label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+}
+.mm-picker input[type="color"] {
+  width: 26px;
+  height: 22px;
+  padding: 1px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #fff;
+  cursor: pointer;
+}
+.mm-picker > button {
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 6px;
+  font-size: 12px;
+  padding: 3px 8px;
+  cursor: pointer;
+  color: var(--muted);
+}
+.mm-picker > button:hover { color: var(--accent); border-color: var(--accent); }
+
+.mm-input {
+  font: inherit;
+  color: inherit;
+  border: none;
+  outline: none;
+  background: transparent;
+  width: 180px;
+  border-bottom: 1.5px dashed currentColor;
+}

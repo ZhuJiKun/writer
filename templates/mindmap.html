@@ -1,0 +1,315 @@
+{% extends "base.html" %}
+{% block title %}{{ m.name }} · 思维导图{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>🧠 {{ m.name }}</h1>
+  <p class="subtitle">
+    <a href="{{ url_for('mindmaps') }}">← 返回列表</a>
+    {% if m.remark %} · {{ m.remark }}{% endif %}
+    · 创建于 {{ m.created_at }} · 更新于 <span id="mm-updated">{{ m.updated_at }}</span>
+  </p>
+</div>
+
+{% if err %}<div class="alert">❌ {{ err }}</div>{% endif %}
+{% if msg %}<div class="toast-ok">✅ {{ msg }}</div>{% endif %}
+
+<div class="action-bar">
+  <button class="btn" type="button" id="mm-add-root">＋ 新建根节点</button>
+  <details class="vol-edit">
+    <summary class="btn secondary btn-like">✎ 编辑名称 / 备注</summary>
+    <form method="post" action="{{ url_for('mindmap_meta', mid=m.id) }}" class="edit-pop">
+      <input type="text" name="name" value="{{ m.name }}" placeholder="名称" required>
+      <input type="text" name="remark" value="{{ m.remark }}" placeholder="备注（可选）">
+      <button class="btn" type="submit">保存</button>
+    </form>
+  </details>
+  <span class="muted">悬停节点显示操作：＋ 添加子节点（层级不限），✎ 重命名，🗑 删除（连同子节点）</span>
+</div>
+
+<div class="card mm-wrap">
+  <div class="mm-canvas" id="mm-canvas"></div>
+</div>
+
+<script>
+(function () {
+  var MID = {{ m.id | tojson }};
+  var nodes = {{ m.nodes | tojson }};
+  var canvas = document.getElementById('mm-canvas');
+  // 根节点的直接子节点按序取分支色（类 XMind 彩虹分支），后代继承
+  var PALETTE = ['#4f6ef7', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#f43f5e', '#84cc16'];
+  // 全局默认节点样式（与后端 DEFAULT_NODE_STYLE 一致）：白底、蓝框、黑字
+  var DEFAULT_STYLE = { bg: '#ffffff', border: '#4f6ef7', color: '#26292f' };
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  var elById = {};   // nid -> 节点 DOM
+  var colorById = {}; // nid -> 分支色（根节点为 null）
+
+  function api(url, params) {
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(params)
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.ok) throw new Error(d.err || ('HTTP 操作失败'));
+      return d;
+    });
+  }
+
+  function childrenOf(pid) {
+    return nodes.filter(function (n) { return (n.parent || null) === pid; });
+  }
+
+  function styleOf(node) {
+    var s = node.style || {};
+    return {
+      bg: s.bg || DEFAULT_STYLE.bg,
+      border: s.border || DEFAULT_STYLE.border,
+      color: s.color || DEFAULT_STYLE.color
+    };
+  }
+
+  function applyStyle(el, node) {
+    var s = styleOf(node);
+    el.style.background = s.bg;
+    el.style.borderColor = s.border;
+    el.style.color = s.color;
+  }
+
+  function makeNodeEl(node, depth, color) {
+    var el = document.createElement('div');
+    el.className = 'mm-node' + (depth === 0 ? ' mm-root' : (depth === 1 ? ' mm-l1' : ''));
+    el.setAttribute('data-nid', node.id);
+    if (color) el.style.setProperty('--bc', color);
+    applyStyle(el, node);
+
+    var span = document.createElement('span');
+    span.className = 'mm-text';
+    span.textContent = node.text;
+    span.title = '双击重命名';
+    el.appendChild(span);
+
+    // 工具条内联在节点右侧，随节点 hover 出现（避免悬浮条与节点间空隙导致点不到）
+    var tools = document.createElement('span');
+    tools.className = 'mm-tools';
+    var bAdd = document.createElement('button');
+    bAdd.type = 'button'; bAdd.textContent = '＋'; bAdd.title = '添加子节点';
+    bAdd.addEventListener('click', function (e) { e.stopPropagation(); addChild(node.id); });
+    var bEdit = document.createElement('button');
+    bEdit.type = 'button'; bEdit.textContent = '✎'; bEdit.title = '重命名';
+    bEdit.addEventListener('click', function (e) { e.stopPropagation(); startEdit(el, node); });
+    var bStyle = document.createElement('button');
+    bStyle.type = 'button'; bStyle.textContent = '🎨'; bStyle.title = '颜色设置';
+    bStyle.addEventListener('click', function (e) { e.stopPropagation(); togglePicker(el, node); });
+    var bDel = document.createElement('button');
+    bDel.type = 'button'; bDel.textContent = '🗑'; bDel.title = '删除（连同子节点）';
+    bDel.addEventListener('click', function (e) { e.stopPropagation(); delNode(node); });
+    tools.appendChild(bAdd); tools.appendChild(bEdit); tools.appendChild(bStyle); tools.appendChild(bDel);
+    el.appendChild(tools);
+
+    span.addEventListener('dblclick', function () { startEdit(el, node); });
+    return el;
+  }
+
+  // ---------- 节点颜色选择器 ----------
+  var openPickerEl = null;
+
+  function closePicker() {
+    if (openPickerEl) { openPickerEl.remove(); openPickerEl = null; }
+  }
+
+  function saveStyle(node) {
+    api('/mindmaps/' + MID + '/node/' + node.id + '/style', styleOf(node))
+      .then(function (d) { node.style = d.node.style; })
+      .catch(function (e) { alert('❌ ' + e.message); });
+  }
+
+  function togglePicker(nodeEl, node) {
+    var existing = nodeEl.querySelector('.mm-picker');
+    closePicker();
+    if (existing) return;
+    var s = styleOf(node);
+    var panel = document.createElement('div');
+    panel.className = 'mm-picker';
+    var inputs = {};
+    [['bg', '背景'], ['border', '边框'], ['color', '字体']].forEach(function (pair) {
+      var lab = document.createElement('label');
+      lab.appendChild(document.createTextNode(pair[1]));
+      var inp = document.createElement('input');
+      inp.type = 'color';
+      inp.value = s[pair[0]];
+      inputs[pair[0]] = inp;
+      inp.addEventListener('input', function () {
+        // 实时预览，松手（change）时才落盘
+        node.style = node.style || {};
+        node.style[pair[0]] = inp.value;
+        applyStyle(nodeEl, node);
+        drawLinks();
+      });
+      inp.addEventListener('change', function () { saveStyle(node); });
+      lab.appendChild(inp);
+      panel.appendChild(lab);
+    });
+    var reset = document.createElement('button');
+    reset.type = 'button';
+    reset.textContent = '恢复默认';
+    reset.addEventListener('click', function (e) {
+      e.stopPropagation();
+      node.style = { bg: DEFAULT_STYLE.bg, border: DEFAULT_STYLE.border, color: DEFAULT_STYLE.color };
+      inputs.bg.value = DEFAULT_STYLE.bg;
+      inputs.border.value = DEFAULT_STYLE.border;
+      inputs.color.value = DEFAULT_STYLE.color;
+      applyStyle(nodeEl, node);
+      drawLinks();
+      saveStyle(node);
+    });
+    panel.appendChild(reset);
+    panel.addEventListener('click', function (e) { e.stopPropagation(); });
+    nodeEl.appendChild(panel);
+    openPickerEl = panel;
+  }
+
+  document.addEventListener('click', closePicker);
+
+  function makeBranch(node, depth, color) {
+    colorById[node.id] = color;
+    var branch = document.createElement('div');
+    branch.className = 'mm-branch';
+    var nodeEl = makeNodeEl(node, depth, color);
+    elById[node.id] = nodeEl;
+    branch.appendChild(nodeEl);
+    var kids = childrenOf(node.id);
+    if (kids.length) {
+      var col = document.createElement('div');
+      col.className = 'mm-children';
+      kids.forEach(function (k, i) {
+        // 根的每个直接子节点领一个分支色，更深的后代继承
+        var kidColor = depth === 0 ? PALETTE[i % PALETTE.length] : color;
+        col.appendChild(makeBranch(k, depth + 1, kidColor));
+      });
+      branch.appendChild(col);
+    }
+    return branch;
+  }
+
+  function drawLinks() {
+    // 用 SVG 贝塞尔曲线连接父子节点（相对画布内容坐标，滚动不影响）
+    var old = canvas.querySelector('svg.mm-links');
+    if (old) old.remove();
+    var crect = canvas.getBoundingClientRect();
+    var svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('class', 'mm-links');
+    svg.setAttribute('width', canvas.scrollWidth);
+    svg.setAttribute('height', canvas.scrollHeight);
+    nodes.forEach(function (n) {
+      if (!n.parent) return;
+      var pEl = elById[n.parent], cEl = elById[n.id];
+      if (!pEl || !cEl) return;
+      var r1 = pEl.getBoundingClientRect(), r2 = cEl.getBoundingClientRect();
+      var x1 = r1.right - crect.left + canvas.scrollLeft;
+      var y1 = r1.top + r1.height / 2 - crect.top + canvas.scrollTop;
+      var x2 = r2.left - crect.left + canvas.scrollLeft;
+      var y2 = r2.top + r2.height / 2 - crect.top + canvas.scrollTop;
+      var h = Math.max(28, (x2 - x1) / 2);
+      var path = document.createElementNS(SVG_NS, 'path');
+      path.setAttribute('d', 'M ' + x1 + ' ' + y1 + ' C ' + (x1 + h) + ' ' + y1 + ', ' + (x2 - h) + ' ' + y2 + ', ' + x2 + ' ' + y2);
+      path.setAttribute('class', 'mm-link');
+      // 连线颜色优先用子节点自定义的边框色，否则回落到分支色
+      var c = (n.style && n.style.border) || colorById[n.id];
+      if (c) path.style.stroke = c;
+      svg.appendChild(path);
+    });
+    canvas.insertBefore(svg, canvas.firstChild);
+  }
+
+  function render() {
+    canvas.replaceChildren();
+    elById = {};
+    colorById = {};
+    openPickerEl = null;
+    var roots = childrenOf(null);
+    if (!roots.length) {
+      var p = document.createElement('p');
+      p.className = 'muted mm-empty';
+      p.textContent = '画布为空，点击「＋ 新建根节点」开始。';
+      canvas.appendChild(p);
+      return;
+    }
+    var forest = document.createElement('div');
+    forest.className = 'mm-forest';
+    roots.forEach(function (r) { forest.appendChild(makeBranch(r, 0, null)); });
+    canvas.appendChild(forest);
+    requestAnimationFrame(drawLinks);
+  }
+
+  function startEdit(nodeEl, node) {
+    if (nodeEl.querySelector('.mm-input')) return;
+    var span = nodeEl.querySelector('.mm-text');
+    var input = document.createElement('input');
+    input.className = 'mm-input';
+    input.value = node.text;
+    span.replaceWith(input);
+    input.focus();
+    input.select();
+    var done = false;
+    function commit(save) {
+      if (done) return;
+      done = true;
+      var text = input.value.trim();
+      if (save && text && text !== node.text) {
+        api('/mindmaps/' + MID + '/node/' + node.id + '/update', { text: text })
+          .then(function (d) { node.text = d.node.text; touch(d.updated_at); render(); })
+          .catch(function (e) { alert('❌ ' + e.message); render(); });
+      } else {
+        render();
+      }
+    }
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+      else if (e.key === 'Escape') { commit(false); }
+    });
+    input.addEventListener('blur', function () { commit(true); });
+  }
+
+  function addChild(pid) {
+    api('/mindmaps/' + MID + '/node/add', { parent_id: pid || '', text: '新节点' })
+      .then(function (d) {
+        nodes.push(d.node);
+        touch(d.updated_at);
+        render();
+        // 重新渲染后找到对应节点进入编辑态
+        var found = canvas.querySelector('.mm-node[data-nid="' + d.node.id + '"]');
+        if (found) startEdit(found, d.node);
+      })
+      .catch(function (e) { alert('❌ ' + e.message); });
+  }
+
+  function delNode(node) {
+    if (!confirm('删除节点「' + node.text + '」？其全部子节点会一并删除。')) return;
+    api('/mindmaps/' + MID + '/node/' + node.id + '/delete', {})
+      .then(function () {
+        var doomed = {};
+        doomed[node.id] = true;
+        var grew = true;
+        while (grew) {
+          grew = false;
+          nodes.forEach(function (n) {
+            if (n.parent && doomed[n.parent] && !doomed[n.id]) { doomed[n.id] = true; grew = true; }
+          });
+        }
+        nodes = nodes.filter(function (n) { return !doomed[n.id]; });
+        render();
+      })
+      .catch(function (e) { alert('❌ ' + e.message); });
+  }
+
+  function touch(ts) {
+    if (ts) document.getElementById('mm-updated').textContent = ts;
+  }
+
+  document.getElementById('mm-add-root').addEventListener('click', function () { addChild(''); });
+  window.addEventListener('resize', drawLinks);
+
+  render();
+})();
+</script>
+{% endblock %}

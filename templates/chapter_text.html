@@ -20,7 +20,7 @@
 
 {% if revise_draft %}
 <div class="card revise-banner">
-  <span>💬 有一份待处理的 LLM 修改稿（要求：{{ revise_draft.instruction }} · {{ revise_draft.created_at }}）</span>
+  <span>💬 有一份待处理的修改稿（{{ revise_draft.instruction }} · {{ revise_draft.created_at }}）</span>
   <a class="btn-inline" href="{{ url_for('chapter_text_compare', cid=entry.chapter_id) }}">去对比选择 →</a>
 </div>
 {% endif %}
@@ -28,7 +28,11 @@
 <div class="card">
   <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px">
     <h2 style="margin:0">正文</h2>
-    <div>
+    <div style="display:flex; gap:8px; align-items:center">
+      <form method="post" action="{{ url_for('chapter_text_format_quote', cid=entry.chapter_id) }}" style="margin:0"
+            onsubmit="return confirm('将正文中的「」和英文直引号统一替换为中文双引号，替换结果进入对比页，确认后才生效。继续？')">
+        <button type="submit" class="btn-inline">🧹 格式替换</button>
+      </form>
       <button type="button" class="btn-inline" id="editToggle" onclick="toggleEdit()">✏️ 编辑正文</button>
       <button type="button" class="btn-inline" id="reviseToggle" onclick="toggleRevise()"
               {% if not llm_on %}disabled title="未配置生成模型"{% endif %}>✨ LLM 修改</button>

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}AI 小说写作系统{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ css_v }}">
   <script>
     // 页面渲染前恢复侧栏折叠状态，避免闪烁
     try {
@@ -32,6 +32,7 @@
       <a href="{{ url_for('memory') }}" class="{{ 'active' if request.endpoint == 'memory' }}">分层记忆</a>
       <a href="{{ url_for('bible') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('bible') }}">世界观设定库</a>
       <a href="{{ url_for('foreshadow') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('foreshadow') }}">伏笔追踪</a>
+      <a href="{{ url_for('mindmaps') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('mindmap') }}">思维导图</a>
       <a href="{{ url_for('style') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('style') }}">文风控制</a>
 
       <div class="nav-section">系统</div>
