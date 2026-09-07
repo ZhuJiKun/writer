@@ -33,6 +33,11 @@
             onsubmit="return confirm('将正文中的「」和英文直引号统一替换为中文双引号，替换结果进入对比页，确认后才生效。继续？')">
         <button type="submit" class="btn-inline">🧹 格式替换</button>
       </form>
+      <form method="post" action="{{ url_for('chapter_text_review', cid=entry.chapter_id) }}" style="margin:0"
+            onsubmit="return guardManualReview(this)">
+        <button type="submit" class="btn-inline" id="reviewSubmit"
+                {% if not llm_on %}disabled title="未配置生成模型"{% endif %}>🔍 手动审校</button>
+      </form>
       <button type="button" class="btn-inline" id="editToggle" onclick="toggleEdit()">✏️ 编辑正文</button>
       <button type="button" class="btn-inline" id="reviseToggle" onclick="toggleRevise()"
               {% if not llm_on %}disabled title="未配置生成模型"{% endif %}>✨ LLM 修改</button>
@@ -105,6 +110,11 @@ function toggleRevise() {
 function guardRevise(form) {
   var btn = document.getElementById('reviseSubmit');
   btn.disabled = true; btn.textContent = 'LLM 修改中…';
+  return true;
+}
+function guardManualReview(form) {
+  var btn = document.getElementById('reviewSubmit');
+  btn.disabled = true; btn.textContent = '审校中…';
   return true;
 }
 
@@ -181,7 +191,11 @@ function copyText(btn) {
   <table>
     <tr><th style="width:110px">检查项</th><th>问题描述</th></tr>
     {% for it in review.issues %}
-    <tr><td><b>{{ it.type }}</b></td><td>{{ it.detail }}</td></tr>
+    <tr><td><b>{{ it.type }}</b></td>
+        <td>
+          {{ it.detail }}
+          {% if it.suggestion %}<p class="muted" style="margin:4px 0 0">💡 {{ it.suggestion }}</p>{% endif %}
+        </td></tr>
     {% endfor %}
   </table>
   {% else %}
@@ -190,18 +204,21 @@ function copyText(btn) {
 </div>
 {% endif %}
 
-{% if history and history|length > 1 %}
+{% if history %}
 <div class="card">
   <h2>审校历史（{{ history|length }} 轮）</h2>
   <table>
-    <tr><th style="width:60px">轮次</th><th style="width:70px">结果</th><th style="width:60px">得分</th><th style="width:80px">字数</th><th>问题数</th></tr>
+    <tr><th style="width:90px">轮次</th><th style="width:70px">来源</th><th style="width:70px">结果</th><th style="width:60px">得分</th><th style="width:80px">字数</th><th>问题数</th><th style="width:120px">时间</th><th style="width:60px">明细</th></tr>
     {% for h in history %}
     <tr>
       <td class="cell-center">第 {{ h.round }} 轮</td>
+      <td class="cell-center"><span class="badge gray">{{ '手动' if h.manual else '自动' }}</span></td>
       <td><span class="badge {{ 'green' if h.pass else 'red' }}">{{ '通过' if h.pass else '未通过' }}</span></td>
       <td class="cell-center">{{ h.score }}</td>
       <td class="cell-center">{{ h.word_count }}</td>
       <td>{{ h.issues|length }} 个</td>
+      <td class="muted cell-center">{{ h.at or '—' }}</td>
+      <td class="cell-center"><a class="btn-inline" href="{{ url_for('review_detail', cid=entry.chapter_id, round_no=h.round) }}">查看</a></td>
     </tr>
     {% endfor %}
   </table>

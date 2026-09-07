@@ -153,6 +153,16 @@ def get_entry(chapter_id):
     return load_store()["contents"].get(chapter_id)
 
 
+@synchronized(_LOCK)
+def delete_entry(chapter_id):
+    """删除某章节的正文记录，返回被删的记录（不存在返回 None）。"""
+    store = load_store()
+    removed = store["contents"].pop(chapter_id, None)
+    if removed is not None:
+        save_store(store)
+    return removed
+
+
 def all_entries():
     return load_store()["contents"]
 

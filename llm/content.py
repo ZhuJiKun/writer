@@ -225,7 +225,7 @@ def _strip_junk(text, title):
 
 
 def critic_review(ctx_brief, no, title, text, min_words, max_words):
-    """审校一章正文（critic 槽位）。返回 {"pass":bool,"score":int,"issues":[{"type","detail"}]}。"""
+    """审校一章正文（critic 槽位）。返回 {"pass":bool,"score":int,"issues":[{"type","detail","suggestion"}]}。"""
     _require_slot("critic")
     sys_prompt = prompts.p_critic_review(no, title, count_words(text), min_words, max_words, ctx_brief)
     data = chat_json(sys_prompt, [{"role": "user", "content": "【待审校正文】\n" + text}],
@@ -234,7 +234,8 @@ def critic_review(ctx_brief, no, title, text, min_words, max_words):
     for it in (data.get("issues") or []):
         if isinstance(it, dict) and it.get("detail"):
             issues.append({"type": str(it.get("type") or "其他").strip(),
-                           "detail": str(it.get("detail") or "").strip()})
+                           "detail": str(it.get("detail") or "").strip(),
+                           "suggestion": str(it.get("suggestion") or "").strip()})
     try:
         score = int(data.get("score"))
     except (TypeError, ValueError):

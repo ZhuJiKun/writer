@@ -6,6 +6,9 @@
   <p class="subtitle">初稿 → Critic 检查（一致性 / 逻辑 / 细纲覆盖 / 文风 / 伏笔 / 字数）→ 问题清单 → 重写 → 复审。以下为各章最终审校记录</p>
 </div>
 
+{% if err %}<div class="alert">❌ {{ err }}</div>{% endif %}
+{% if msg %}<div class="toast-ok">✅ {{ msg }}</div>{% endif %}
+
 <div class="grid-3">
   <div class="stat"><div class="num">{{ stats.total }}</div><div class="label">已审校章节</div></div>
   <div class="stat"><div class="num">{{ stats.first_pass }}</div><div class="label">首轮即通过</div></div>
@@ -25,7 +28,7 @@
     <tr>
       <th style="width:48px">章号</th><th style="width:90px">卷</th><th>章节</th>
       <th style="width:70px">结果</th><th style="width:60px">得分</th><th style="width:60px">轮次</th>
-      <th>主要问题</th><th style="width:130px">时间</th>
+      <th>主要问题</th><th style="width:130px">时间</th><th style="width:60px">明细</th>
     </tr>
     {% for r in rows %}
     <tr>
@@ -42,10 +45,31 @@
         {% else %}<span class="muted">—</span>{% endif %}
       </td>
       <td class="muted">{{ r.updated_at }}</td>
+      <td class="cell-center"><a class="btn-inline" href="{{ url_for('review_detail', cid=r.cid, round_no=r.final.round) }}">查看</a></td>
     </tr>
     {% endfor %}
   </table>
-  <p class="muted mt">点击工作台章节行的「阅读」可查看单章完整审校明细与历史轮次。</p>
+  {% if pages > 1 %}
+  <div class="pager">
+    {% if page > 1 %}<a class="btn-inline" href="{{ url_for('review') }}?page={{ page - 1 }}">← 上一页</a>{% endif %}
+    {% set ns = namespace(prev=0) %}
+    {% for p in range(1, pages + 1) %}
+      {% if p == 1 or p == pages or (p >= page - 2 and p <= page + 2) %}
+        {% if ns.prev and p > ns.prev + 1 %}<span class="muted">…</span>{% endif %}
+        {% if p == page %}<span class="pg cur">{{ p }}</span>
+        {% else %}<a class="pg" href="{{ url_for('review') }}?page={{ p }}">{{ p }}</a>{% endif %}
+        {% set ns.prev = p %}
+      {% endif %}
+    {% endfor %}
+    {% if page < pages %}<a class="btn-inline" href="{{ url_for('review') }}?page={{ page + 1 }}">下一页 →</a>{% endif %}
+    <span class="muted">共 {{ total }} 章</span>
+    <form class="pager-jump" method="get" action="{{ url_for('review') }}">
+      跳至 <input type="number" name="page" min="1" max="{{ pages }}" value="{{ page }}"> 页
+      <button class="btn-inline" type="submit">确定</button>
+    </form>
+  </div>
+  {% endif %}
+  <p class="muted mt">「明细」查看最终一轮的完整问题清单；单章全部历史轮次见正文页底部的「审校历史」。</p>
   {% endif %}
 </div>
 {% endblock %}

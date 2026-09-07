@@ -356,7 +356,8 @@ def _run_generate(tid, chapter_ids):
                 elif wc > max_words:
                     result["issues"].append({"type": "字数",
                                              "detail": "实际约 %d 字，超出上限的 %d 字" % (wc, max_words)})
-                review["history"].append({"round": round_no + 1, **result})
+                review["history"].append({"round": round_no + 1,
+                                          "at": datetime.now().strftime("%Y-%m-%d %H:%M"), **result})
                 review["rounds"] = round_no + 1
                 _log(tid, "%s：第 %d 轮审校 %s（%d 分，约 %d 字，%d 个问题）"
                      % (label, round_no + 1, "通过" if result["pass"] else "未通过",

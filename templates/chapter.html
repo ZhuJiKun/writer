@@ -127,7 +127,7 @@
       <tr>
         <th style="width:36px"><input type="checkbox" id="check-all" title="全选可操作章节"></th><th style="width:48px">章号</th><th style="width:90px">卷</th>
         <th>章节</th><th style="width:170px">锚点</th><th style="width:80px">状态</th><th style="width:70px">字数</th>
-        <th style="width:88px">审校</th><th style="width:60px">正文</th>
+        <th style="width:88px">审校</th><th style="width:60px">正文</th><th style="width:52px">操作</th>
       </tr>
       {% for r in rows %}
       <tr>
@@ -223,6 +223,13 @@
           {% if r.read_ok %}<a class="btn-inline" href="{{ url_for('chapter_text', cid=r.cid) }}">阅读</a>
           {% else %}<span class="muted">—</span>{% endif %}
         </td>
+        <td class="cell-center">
+          {% if r.delete_ok %}
+          <button type="submit" class="btn-inline danger" form="del-{{ r.cid }}"
+                  onclick="return confirm('删除第 {{ r.no }} 章「{{ r.title }}」？大纲条目与正文将一并删除，不可恢复。');"
+                  title="删除草稿章节">🗑</button>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
       </tr>
       {% endfor %}
     </table>
@@ -278,6 +285,9 @@
   {% if r.read_ok %}
   <form id="anchorx-{{ r.cid }}" method="post" action="{{ url_for('chapter_anchor_extract', cid=r.cid) }}"></form>
   {% endif %}
+  {% endif %}
+  {% if r.delete_ok %}
+  <form id="del-{{ r.cid }}" method="post" action="{{ url_for('chapter_delete', cid=r.cid) }}"></form>
   {% endif %}{% endfor %}
   {% endif %}
 </div>

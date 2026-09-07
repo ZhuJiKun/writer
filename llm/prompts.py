@@ -226,9 +226,12 @@ def p_critic_review(no, title, actual_words, min_words, max_words, ctx_brief):
         "（开场时间不得倒退；时间/地点跳跃必须显式交代；不在场人物不得无交代地出现或开口；"
         "上下文没有锚点块则跳过本项）。\n"
         "通过标准：无一致性/逻辑硬伤、细纲基本覆盖、字数达标。问题要具体（指出哪里、为什么）。\n"
+        "每个问题可同时给出 suggestion（不强制）：针对该问题的具体修改建议，最好直接给出可替换的示例措辞"
+        "（如「可改为：……」）；没有合适建议或问题只能靠整体重写解决时留空，不要硬凑。\n"
         "另外输出 scene_end：本章正文【结尾时刻】的场景快照——time 故事内时间（如「军训第3天·傍晚」，"
         "含第几天与时段）、place 结尾所在地、present 结尾在场人物名单；某一项正文无法确定就留空，不要编造。\n"
-        "只输出 JSON：{\"pass\":true或false,\"score\":1到10的整数,\"issues\":[{\"type\":\"检查项\",\"detail\":\"问题描述\"}],"
+        "只输出 JSON：{\"pass\":true或false,\"score\":1到10的整数,"
+        "\"issues\":[{\"type\":\"检查项\",\"detail\":\"问题描述\",\"suggestion\":\"修改建议，可空\"}],"
         "\"scene_end\":{\"time\":\"\",\"place\":\"\",\"present\":[\"\"]}}\n\n"
         "【作品上下文】\n%s"
         % (no, title, actual_words, min_words, max_words, ctx_brief)

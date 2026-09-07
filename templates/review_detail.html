@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}审校明细 · 第{{ no }}章 第{{ rec.round }}轮{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>审校明细 · 第 {{ no }} 章《{{ title }}》</h1>
+  <p class="subtitle">{{ vol }} · 第 {{ rec.round }} 轮 / 共 {{ rounds }} 轮
+    <span class="badge gray">{{ '手动触发' if rec.manual else '自动生成' }}</span>
+    {% if rec.at %}· 审校于 {{ rec.at }}{% endif %}
+  </p>
+  <p class="mt">
+    {% if prev_round %}<a class="btn-inline" href="{{ url_for('review_detail', cid=cid, round_no=prev_round) }}">← 第 {{ prev_round }} 轮</a>{% endif %}
+    {% if next_round %}<a class="btn-inline" href="{{ url_for('review_detail', cid=cid, round_no=next_round) }}">第 {{ next_round }} 轮 →</a>{% endif %}
+    <a class="btn-inline" href="{{ url_for('chapter_text', cid=cid) }}">返回正文</a>
+    <a class="btn-inline" href="{{ url_for('review') }}">返回审校循环</a>
+  </p>
+</div>
+
+<div class="grid-3">
+  <div class="stat">
+    <div class="num"><span class="badge {{ 'green' if rec.pass else 'red' }}" style="font-size:18px">{{ '通过' if rec.pass else '未通过' }}</span></div>
+    <div class="label">审校结论</div>
+  </div>
+  <div class="stat"><div class="num">{{ rec.score }}</div><div class="label">得分（满分 10）</div></div>
+  <div class="stat"><div class="num">{{ rec.word_count or '—' }}</div><div class="label">当时正文字数</div></div>
+</div>
+
+<div class="card mt">
+  <h2>问题清单 <span class="badge gray">{{ rec.issues|length }}</span></h2>
+  {% if rec.issues %}
+  <table>
+    <tr><th style="width:50px">#</th><th style="width:110px">检查项</th><th>问题描述</th></tr>
+    {% for it in rec.issues %}
+    <tr>
+      <td class="cell-center muted">{{ loop.index }}</td>
+      <td><b>{{ it.type }}</b></td>
+      <td>
+        {{ it.detail }}
+        {% if it.suggestion %}<p class="muted" style="margin:4px 0 0">💡 {{ it.suggestion }}</p>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">本轮没有发现问题。</p>
+  {% endif %}
+</div>
+
+{% if rec.scene_end %}
+<div class="card">
+  <h2>本轮抽取的场景锚点</h2>
+  <table>
+    <tr><th style="width:110px">时间</th><td>{{ rec.scene_end.time or '—' }}</td></tr>
+    <tr><th>地点</th><td>{{ rec.scene_end.place or '—' }}</td></tr>
+    <tr><th>在场人物</th><td>{{ rec.scene_end.present|join('、') if rec.scene_end.present else '—' }}</td></tr>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

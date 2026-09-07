@@ -3,6 +3,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from datetime import datetime
 
 from flask import Flask, Response, jsonify, redirect, render_template, request, stream_with_context, url_for
 from markupsafe import Markup, escape
@@ -129,6 +130,8 @@ def _chapter_rows():
                         (not e and ch.get("status") == ost.STATUS_TODO),
             "adopt_ok": bool(e and e_status == hst.ST_DRAFT),
             "read_ok": bool(e and e.get("content")),
+            # 只有草稿可删除（未采纳、正文未回写，删除无连锁影响）
+            "delete_ok": e_status == hst.ST_DRAFT,
             # 已采纳章节的摘要已回写分层记忆，标题/概要锁定；其余阶段都允许在工作台改
             "edit_ok": e_status != hst.ST_ADOPTED,
         })
@@ -430,6 +433,22 @@ def chapter_adopt():
     return redirect(url_for("chapter", task=tid, msg=msg))
 
 
+@app.route("/chapter/<cid>/delete", methods=["POST"])
+def chapter_delete(cid):
+    """删除草稿章节：连同大纲条目与正文记录一起删除（记忆摘要由分层记忆页自动清理）。"""
+    entry = hst.get_entry(cid)
+    if not entry or entry.get("status") != hst.ST_DRAFT:
+        return redirect(url_for("chapter", err="只有「草稿」状态的章节才能删除"))
+    if we.active_task():
+        return redirect(url_for("chapter", err="已有任务在运行，请等它结束再删除"))
+    vol, ch, no = ost.find_chapter(cid)
+    if not ch:
+        return redirect(url_for("chapter", err="章节不存在"))
+    hst.delete_entry(cid)
+    ost.delete_chapter(cid)
+    return redirect(url_for("chapter", msg="已删除第 %d 章「%s」" % (no, ch.get("title", ""))))
+
+
 @app.route("/chapter/task/<tid>")
 def chapter_task(tid):
     """任务进度轮询。"""
@@ -606,7 +625,52 @@ def chapter_text_revise_apply(cid):
     return redirect(url_for("chapter_text", cid=cid, msg="已保留原文，修改稿已删除"))
 
 
+@app.route("/chapter/text/<cid>/review", methods=["POST"])
+def chapter_text_review(cid):
+    """手动触发一轮审校（只检查、不重写正文），结果追加到审校历史并作为最新结论。"""
+    entry = hst.get_entry(cid)
+    cmap = we.chapter_map()
+    meta = cmap.get(cid)
+    if not entry or not entry.get("content") or not meta:
+        return redirect(url_for("chapter", err="该章节还没有正文"))
+    if we.active_task():
+        return redirect(url_for("chapter_text", cid=cid, err="有生成/采纳任务进行中，稍后再试"))
+    _, ch, no = meta
+    text = entry["content"]
+    min_words = entry.get("min_words") or we.DEFAULT_MIN_WORDS
+    max_words = entry.get("max_words") or min_words * 2
+    try:
+        ctx = we.build_chapter_context(cid, cmap)
+        result = cli.critic_review(ctx["text"], no, ch["title"], text, min_words, max_words)
+    except cli.LLMError as e:
+        return redirect(url_for("chapter_text", cid=cid, err="审校调用失败：" + str(e)))
+    wc = cli.count_words(text)
+    result["word_count"] = wc
+    # 与生成流水线一致：字数越界也记入审校问题
+    if wc < min_words:
+        result["issues"].append({"type": "字数",
+                                 "detail": "实际约 %d 字，不足要求的 %d 字" % (wc, min_words)})
+    elif wc > max_words:
+        result["issues"].append({"type": "字数",
+                                 "detail": "实际约 %d 字，超出上限的 %d 字" % (wc, max_words)})
+    review = entry.get("review") or {"rounds": 0, "final": None, "history": []}
+    review.setdefault("history", [])
+    review["history"].append({"round": len(review["history"]) + 1, "manual": True,
+                              "at": datetime.now().strftime("%Y-%m-%d %H:%M"), **result})
+    review["rounds"] = len(review["history"])
+    review["final"] = review["history"][-1]
+    # 状态与正文不动；场景锚点顺带更新为最新一轮的抽取结果
+    hst.set_status(cid, entry["status"], review=review, scene_end=result.get("scene_end"))
+    verdict = "通过" if result["pass"] else "未通过"
+    return redirect(url_for("chapter_text", cid=cid,
+                            msg="手动审校完成：%s（%d 分，%d 个问题）"
+                                % (verdict, result["score"], len(result["issues"]))))
+
+
 # ---------- 审校循环模块 ----------
+
+REVIEW_PER_PAGE = 10
+
 
 @app.route("/review")
 def review():
@@ -635,7 +699,30 @@ def review():
     failed = sum(1 for r in rows if not r["final"].get("pass")
                  and r["status"] == hst.ST_DRAFT)
     stats = {"total": total, "first_pass": first_pass, "avg": avg, "failed": failed}
-    return render_template("review.html", rows=rows, stats=stats)
+    pages = max(1, -(-total // REVIEW_PER_PAGE))
+    page = min(_page_arg("page"), pages)
+    return render_template("review.html", rows=rows[(page - 1) * REVIEW_PER_PAGE:page * REVIEW_PER_PAGE],
+                           stats=stats, page=page, pages=pages, total=total,
+                           msg=request.args.get("msg"), err=request.args.get("err"))
+
+
+@app.route("/review/detail/<cid>/<int:round_no>")
+def review_detail(cid, round_no):
+    """单章某一轮审校的明细：完整问题清单、得分、字数、场景锚点。"""
+    entry = hst.get_entry(cid)
+    meta = we.chapter_map().get(cid)
+    history = ((entry or {}).get("review") or {}).get("history") or []
+    rec = next((h for h in history if h.get("round") == round_no), None)
+    if not entry or not meta or rec is None:
+        return redirect(url_for("review", err="审校记录不存在（章节可能已从大纲删除）"))
+    vol, ch, no = meta
+    round_nos = sorted(h.get("round") for h in history)
+    idx = round_nos.index(round_no)
+    prev_round = round_nos[idx - 1] if idx > 0 else None
+    next_round = round_nos[idx + 1] if idx + 1 < len(round_nos) else None
+    return render_template("review_detail.html", cid=cid, no=no, vol=vol.get("title", ""),
+                           title=ch.get("title", ""), rec=rec, rounds=len(history),
+                           prev_round=prev_round, next_round=next_round)
 
 
 # ---------- 角色列表模块 ----------
