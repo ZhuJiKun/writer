@@ -172,6 +172,9 @@ def _style_block(proj):
     samples = sst.load_store()["samples"]
     if samples:
         lines.append("文风样例（模仿其语感）：\n" + samples[-1].get("content", "")[:400])
+    ai_rules = sst.load_store().get("ai_rules", "")
+    if ai_rules:
+        lines.append("行文禁忌（硬性遵守，避免 AI 腔）：\n" + ai_rules)
     return "【文风规范】\n" + "\n".join(lines) if lines else ""
 
 

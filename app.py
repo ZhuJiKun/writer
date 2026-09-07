@@ -1495,6 +1495,19 @@ def style_save():
     return redirect(url_for("style", msg="风格约束已保存"))
 
 
+@app.route("/style/ai-rules/save", methods=["POST"])
+def style_ai_rules_save():
+    saved = sst.save_ai_rules(request.form.get("ai_rules", ""))
+    msg = "行文禁忌已保存" if saved else "行文禁忌已清空（生成正文时不再注入）"
+    return redirect(url_for("style", msg=msg))
+
+
+@app.route("/style/ai-rules/reset", methods=["POST"])
+def style_ai_rules_reset():
+    sst.save_ai_rules(sst.DEFAULT_AI_RULES)
+    return redirect(url_for("style", msg="已恢复默认行文禁忌"))
+
+
 @app.route("/style/sample/generate", methods=["POST"])
 def style_sample_generate():
     proj = ps.load_project()

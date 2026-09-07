@@ -39,6 +39,23 @@
 
 <div class="card">
   <div class="vol-head">
+    <h2>去 AI 味 · 行文禁忌</h2>
+    <div class="vol-tools">
+      <form method="post" action="{{ url_for('style_ai_rules_reset') }}">
+        <button class="btn-inline" type="submit">恢复默认</button>
+      </form>
+    </div>
+  </div>
+  <p class="muted">写给 LLM 的行文「不要清单」，随文风规范一起注入正文生成 / 重写 / 审校。针对常见 AI 腔，例如把对话切碎成
+    「"在想，"他收回神识，淡淡一笑，"这地方，能待。"」这类三段式。按本书情况自行增删；清空保存即关闭。</p>
+  <form method="post" action="{{ url_for('style_ai_rules_save') }}">
+    <textarea name="ai_rules" rows="9" style="width:100%">{{ store.ai_rules }}</textarea>
+    <div class="mt"><button class="btn" type="submit">保存禁忌</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="vol-head">
     <h2>标准文风样章 <span class="badge gray">{{ store.samples|length }}</span></h2>
     <div class="vol-tools">
       <form method="post" action="{{ url_for('style_sample_generate') }}">
